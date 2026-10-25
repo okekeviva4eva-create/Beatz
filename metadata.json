@@ -1,0 +1,6 @@
+{
+  "name": "AKAI MPK mini Studio",
+  "description": "Interactive hardware-accurate AKAI Professional MPK mini MK2 synthesizer, MPC drum pad controller, arpeggiator, and loop workstation built with Web Audio API.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

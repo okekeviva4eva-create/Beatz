@@ -1,0 +1,131 @@
+{
+  "entities": {
+    "SynthPatch": {
+      "title": "SynthPatch",
+      "description": "A saved AKAI MPK mini hardware synthesizer patch, knob bank configuration, and arpeggiator clock preset owned by a user.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "The Firebase Auth UID of the patch owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorName": {
+          "type": "string",
+          "description": "Display name of the creator.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "name": {
+          "type": "string",
+          "description": "Title of the saved hardware patch.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "programId": {
+          "type": "number",
+          "description": "Hardware program preset ID (1 to 4)."
+        },
+        "bpm": {
+          "type": "number",
+          "description": "Master clock tempo in BPM (40 to 220)."
+        },
+        "timeDivision": {
+          "type": "string",
+          "description": "Arpeggiator and Note Repeat time division.",
+          "enum": ["1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/32T"],
+          "minLength": 3,
+          "maxLength": 6
+        },
+        "arpMode": {
+          "type": "string",
+          "description": "Arpeggiator direction mode.",
+          "enum": ["UP", "DOWN", "EXCL", "INCL", "ORDER", "RAND"],
+          "minLength": 2,
+          "maxLength": 6
+        },
+        "arpOctaves": {
+          "type": "number",
+          "description": "Arpeggiator octave range (1 to 4)."
+        },
+        "swing": {
+          "type": "number",
+          "description": "Swing percentage (50 to 64)."
+        },
+        "k1Cutoff": {
+          "type": "number",
+          "description": "Knob K1 Filter Cutoff (0 to 127)."
+        },
+        "k2Resonance": {
+          "type": "number",
+          "description": "Knob K2 Filter Resonance (0 to 127)."
+        },
+        "k3Attack": {
+          "type": "number",
+          "description": "Knob K3 Amp Attack (0 to 127)."
+        },
+        "k4Release": {
+          "type": "number",
+          "description": "Knob K4 Amp Release (0 to 127)."
+        },
+        "k5Detune": {
+          "type": "number",
+          "description": "Knob K5 Unison Detune (0 to 127)."
+        },
+        "k6SubMix": {
+          "type": "number",
+          "description": "Knob K6 Sub Oscillator Mix (0 to 127)."
+        },
+        "k7DelayMix": {
+          "type": "number",
+          "description": "Knob K7 Stereo Delay Mix (0 to 127)."
+        },
+        "k8ReverbMix": {
+          "type": "number",
+          "description": "Knob K8 Studio Reverb Mix (0 to 127)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the patch was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the patch was last updated."
+        }
+      },
+      "required": [
+        "ownerId",
+        "authorName",
+        "name",
+        "programId",
+        "bpm",
+        "timeDivision",
+        "arpMode",
+        "arpOctaves",
+        "swing",
+        "k1Cutoff",
+        "k2Resonance",
+        "k3Attack",
+        "k4Release",
+        "k5Detune",
+        "k6SubMix",
+        "k7DelayMix",
+        "k8ReverbMix",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/patches/{patchId}": {
+      "schema": {
+        "$ref": "#/entities/SynthPatch"
+      },
+      "description": "Stores user-created AKAI MPK mini synthesizer patches and knob configurations."
+    }
+  }
+}

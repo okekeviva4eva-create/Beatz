@@ -1,0 +1,161 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 1: Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global Hardened Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isKnobVal(val) {
+      return val is number && val >= 0 && val <= 127;
+    }
+
+    function isValidSynthPatch(data) {
+      return data.keys().hasAll([
+        'ownerId',
+        'authorName',
+        'name',
+        'programId',
+        'bpm',
+        'timeDivision',
+        'arpMode',
+        'arpOctaves',
+        'swing',
+        'k1Cutoff',
+        'k2Resonance',
+        'k3Attack',
+        'k4Release',
+        'k5Detune',
+        'k6SubMix',
+        'k7DelayMix',
+        'k8ReverbMix',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'ownerId',
+        'authorName',
+        'name',
+        'programId',
+        'bpm',
+        'timeDivision',
+        'arpMode',
+        'arpOctaves',
+        'swing',
+        'k1Cutoff',
+        'k2Resonance',
+        'k3Attack',
+        'k4Release',
+        'k5Detune',
+        'k6SubMix',
+        'k7DelayMix',
+        'k8ReverbMix',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.ownerId is string &&
+      data.ownerId.size() >= 1 &&
+      data.ownerId.size() <= 128 &&
+      data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.ownerId == request.auth.uid &&
+      data.authorName is string &&
+      data.authorName.size() >= 1 &&
+      data.authorName.size() <= 80 &&
+      data.name is string &&
+      data.name.size() >= 1 &&
+      data.name.size() <= 80 &&
+      data.programId is number &&
+      data.programId >= 1 &&
+      data.programId <= 4 &&
+      data.bpm is number &&
+      data.bpm >= 40 &&
+      data.bpm <= 220 &&
+      data.timeDivision is string &&
+      data.timeDivision.size() >= 3 &&
+      data.timeDivision.size() <= 6 &&
+      data.timeDivision in ['1/4', '1/4T', '1/8', '1/8T', '1/16', '1/16T', '1/32', '1/32T'] &&
+      data.arpMode is string &&
+      data.arpMode.size() >= 2 &&
+      data.arpMode.size() <= 6 &&
+      data.arpMode in ['UP', 'DOWN', 'EXCL', 'INCL', 'ORDER', 'RAND'] &&
+      data.arpOctaves is number &&
+      data.arpOctaves >= 1 &&
+      data.arpOctaves <= 4 &&
+      data.swing is number &&
+      data.swing in [50, 55, 57, 59, 61, 64] &&
+      isKnobVal(data.k1Cutoff) &&
+      isKnobVal(data.k2Resonance) &&
+      isKnobVal(data.k3Attack) &&
+      isKnobVal(data.k4Release) &&
+      isKnobVal(data.k5Detune) &&
+      isKnobVal(data.k6SubMix) &&
+      isKnobVal(data.k7DelayMix) &&
+      isKnobVal(data.k8ReverbMix) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    match /patches/{patchId} {
+      allow get: if isSignedIn() && isValidId(patchId) && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+
+      allow create: if isVerified() &&
+        isValidId(patchId) &&
+        isValidSynthPatch(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerified() &&
+        isValidId(patchId) &&
+        isValidSynthPatch(incoming()) &&
+        existing().ownerId == request.auth.uid &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'authorName',
+          'name',
+          'programId',
+          'bpm',
+          'timeDivision',
+          'arpMode',
+          'arpOctaves',
+          'swing',
+          'k1Cutoff',
+          'k2Resonance',
+          'k3Attack',
+          'k4Release',
+          'k5Detune',
+          'k6SubMix',
+          'k7DelayMix',
+          'k8ReverbMix',
+          'updatedAt'
+        ]);
+
+      allow delete: if isVerified() &&
+        isValidId(patchId) &&
+        existing().ownerId == request.auth.uid;
+    }
+  }
+}
