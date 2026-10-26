@@ -19,11 +19,11 @@ export const HardwareHoverCallout: React.FC<{ info: HoveredControlInfo | null }>
   if (!info) return null;
 
   const viewportW = typeof window !== 'undefined' ? window.innerWidth : 1280;
-  const cardWidth = 280;
+  const cardWidth = 210;
   const centerX = info.rect.left + info.rect.width / 2;
-  const clampedLeft = Math.max(12, Math.min(viewportW - cardWidth - 12, centerX - cardWidth / 2));
-  const showBelow = info.rect.top < 110;
-  const topPos = showBelow ? info.rect.bottom + 10 : info.rect.top - 10;
+  const clampedLeft = Math.max(10, Math.min(viewportW - cardWidth - 10, centerX - cardWidth / 2));
+  const showBelow = info.rect.top < 85;
+  const topPos = showBelow ? info.rect.bottom + 6 : info.rect.top - 6;
 
   return (
     <div
@@ -33,27 +33,27 @@ export const HardwareHoverCallout: React.FC<{ info: HoveredControlInfo | null }>
         width: `${cardWidth}px`,
         transform: showBelow ? 'translateY(0)' : 'translateY(-100%)',
       }}
-      className="fixed z-50 pointer-events-none select-none rounded-lg bg-[#0c0d10]/95 backdrop-blur-md border border-red-500/70 shadow-[0_12px_30px_rgba(0,0,0,0.9),0_0_16px_rgba(239,68,68,0.3)] px-3 py-2 text-left transition-opacity duration-75"
+      className="fixed z-50 pointer-events-none select-none rounded-md bg-[#0c0d10]/95 backdrop-blur-md border border-red-500/60 shadow-[0_8px_20px_rgba(0,0,0,0.85),0_0_10px_rgba(239,68,68,0.22)] px-2 py-1.5 text-left transition-opacity duration-75"
     >
-      <div className="flex items-center justify-between gap-2 border-b border-zinc-800/90 pb-1 mb-1">
-        <span className="text-[11px] font-mono-tabular font-extrabold uppercase tracking-wider text-red-400 truncate">
+      <div className="flex items-center justify-between gap-1.5 border-b border-zinc-800/90 pb-0.5 mb-1">
+        <span className="text-[9px] font-mono-tabular font-extrabold uppercase tracking-wider text-red-400 truncate">
           {info.title}
         </span>
         {info.shortcut && (
-          <span className="text-[9.5px] font-mono-tabular font-bold px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-200 border border-zinc-700 shrink-0">
+          <span className="text-[8px] font-mono-tabular font-semibold px-1 py-0.2 rounded bg-zinc-800/90 text-zinc-300 border border-zinc-700/80 shrink-0">
             {info.shortcut}
           </span>
         )}
       </div>
 
-      <p className="text-[11px] text-zinc-200 leading-snug font-medium">
+      <p className="text-[9.5px] text-zinc-200 leading-tight font-normal">
         {info.func}
       </p>
 
       {info.state && (
-        <div className="mt-1.5 pt-1 border-t border-zinc-800/70 flex items-center justify-between text-[10px] font-mono-tabular">
-          <span className="text-zinc-400">STATUS</span>
-          <span className="text-white font-bold">{info.state}</span>
+        <div className="mt-1 pt-0.5 border-t border-zinc-800/70 flex items-center justify-between text-[8.5px] font-mono-tabular">
+          <span className="text-zinc-400">STATE</span>
+          <span className="text-zinc-100 font-semibold truncate ml-2">{info.state}</span>
         </div>
       )}
     </div>

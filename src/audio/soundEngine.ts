@@ -252,6 +252,10 @@ class SoundEngine {
   private activeVoices: Map<number, ActiveVoice> = new Map();
   private customPadBuffers: Map<string, AudioBuffer> = new Map();
   private activePadSources: Map<string, AudioBufferSourceNode> = new Map();
+  private mediaDest: MediaStreamAudioDestinationNode | null = null;
+  private mediaRecorder: MediaRecorder | null = null;
+  private recordedAudioChunks: Blob[] = [];
+  private recordStartTimeMs = 0;
   private pitchBendNorm = 0; // -1..1
   private modNorm = 0;       // -1..1
   private currentProgram: ProgramPreset = PROGRAM_PRESETS[0];
@@ -320,6 +324,11 @@ class SoundEngine {
       compressor.connect(this.analyser);
       this.analyser.connect(this.ctx.destination);
 
+      if (typeof this.ctx.createMediaStreamDestination === 'function') {
+        this.mediaDest = this.ctx.createMediaStreamDestination();
+        compressor.connect(this.mediaDest);
+      }
+
       this.noiseBuffer = this.createWhiteNoiseBuffer();
     }
 
@@ -355,6 +364,94 @@ class SoundEngine {
 
   public getAnalyser(): AnalyserNode | null {
     return this.analyser;
+  }
+
+  public playMetronomeClick(isDownbeat: boolean) {
+    const ctx = this.ensureContext();
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'triangle';
+    const freq = isDownbeat ? 1320 : 880;
+    osc.frequency.setValueAtTime(freq, now);
+    osc.frequency.exponentialRampToValueAtTime(freq * 0.65, now + 0.032);
+
+    gain.gain.setValueAtTime(isDownbeat ? 0.28 : 0.16, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.036);
+
+    osc.connect(gain);
+    gain.connect(this.masterGain!);
+    osc.start(now);
+    osc.stop(now + 0.04);
+  }
+
+  public startMasterAudioRecording(): boolean {
+    this.ensureContext();
+    if (!this.mediaDest || typeof MediaRecorder === 'undefined') {
+      return false;
+    }
+    if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+      return true;
+    }
+
+    this.recordedAudioChunks = [];
+    const mimeTypes = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+      'audio/mp4',
+    ];
+    let selectedMime = '';
+    for (const mime of mimeTypes) {
+      if (MediaRecorder.isTypeSupported(mime)) {
+        selectedMime = mime;
+        break;
+      }
+    }
+
+    this.mediaRecorder = selectedMime
+      ? new MediaRecorder(this.mediaDest.stream, { mimeType: selectedMime })
+      : new MediaRecorder(this.mediaDest.stream);
+
+    this.mediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) {
+        this.recordedAudioChunks.push(e.data);
+      }
+    };
+
+    this.recordStartTimeMs = performance.now();
+    this.mediaRecorder.start(100);
+    return true;
+  }
+
+  public stopMasterAudioRecording(): Promise<{
+    url: string;
+    blob: Blob;
+    mimeType: string;
+    durationSec: number;
+  } | null> {
+    return new Promise((resolve) => {
+      if (!this.mediaRecorder || this.mediaRecorder.state === 'inactive') {
+        resolve(null);
+        return;
+      }
+
+      const durationSec = Math.max(0.5, (performance.now() - this.recordStartTimeMs) / 1000);
+      const mimeType = this.mediaRecorder.mimeType || 'audio/webm';
+
+      this.mediaRecorder.onstop = () => {
+        if (this.recordedAudioChunks.length === 0) {
+          resolve(null);
+          return;
+        }
+        const blob = new Blob(this.recordedAudioChunks, { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        resolve({ url, blob, mimeType, durationSec });
+      };
+
+      this.mediaRecorder.stop();
+    });
   }
 
   public setMasterVolume(val: number) {
@@ -421,14 +518,15 @@ class SoundEngine {
     return 0.7 + (this.knobs.k2Resonance / 127) * 15 + Math.abs(this.modNorm) * 4;
   }
 
-  public noteOn(midiNote: number, velocity = 100) {
+  public noteOn(midiNote: number, velocity = 100, voiceModeOverride?: KeyboardVoiceMode) {
     const ctx = this.ensureContext();
     if (this.activeVoices.has(midiNote)) {
       this.noteOff(midiNote);
     }
 
     const now = ctx.currentTime;
-    const isBassGuitar = this.keyboardVoiceMode !== 'synth';
+    const voiceMode = voiceModeOverride || this.keyboardVoiceMode;
+    const isBassGuitar = voiceMode !== 'synth';
     // Bass guitar plays 1 octave deeper so C3..C5 on the 25-key bed maps to C2..C4 / E1..E3 bass range
     const rawFreq = 440 * Math.pow(2, (midiNote - 69) / 12);
     const baseFreq = isBassGuitar ? rawFreq * 0.5 : rawFreq;
@@ -445,19 +543,19 @@ class SoundEngine {
       osc1.type = this.currentProgram.osc1Type;
       osc2.type = this.currentProgram.osc2Type;
       subOsc.type = 'sine';
-    } else if (this.keyboardVoiceMode === 'finger-bass') {
+    } else if (voiceMode === 'finger-bass') {
       // Vintage Precision Bass: warm triangle fundamental + sawtooth string harmonics
       osc1.type = 'triangle';
       osc2.type = 'sawtooth';
       subOsc.type = 'sine';
       osc2Ratio = 1;
-    } else if (this.keyboardVoiceMode === 'slap-bass') {
+    } else if (voiceMode === 'slap-bass') {
       // Funk Jazz Bass: bright sawtooth + square bridge pickup harmonic bite
       osc1.type = 'sawtooth';
       osc2.type = 'square';
       subOsc.type = 'sine';
       osc2Ratio = 2; // Upper octave harmonic pop
-    } else if (this.keyboardVoiceMode === 'picked-bass') {
+    } else if (voiceMode === 'picked-bass') {
       // Picked Rock Bass: dual sawtooth + square plectrum grit
       osc1.type = 'sawtooth';
       osc2.type = 'square';
@@ -471,7 +569,7 @@ class SoundEngine {
       osc2Ratio = 1;
     }
 
-    if (this.keyboardVoiceMode === 'fretless-bass') {
+    if (voiceMode === 'fretless-bass') {
       // Subtle fretless finger slide-in articulation
       osc1.frequency.setValueAtTime(freq * 0.965, now);
       osc1.frequency.exponentialRampToValueAtTime(freq, now + 0.055);
@@ -485,7 +583,7 @@ class SoundEngine {
     }
 
     const detuneCents =
-      this.keyboardVoiceMode === 'fretless-bass'
+      voiceMode === 'fretless-bass'
         ? Math.max(14, (this.knobs.k5Detune / 127) * 35)
         : isBassGuitar
         ? (this.knobs.k5Detune / 127) * 16
@@ -502,15 +600,15 @@ class SoundEngine {
       osc1Gain.gain.value = 0.35;
       osc2Gain.gain.value = 0.28;
       subGain.gain.value = (this.knobs.k6SubMix / 127) * 0.45;
-    } else if (this.keyboardVoiceMode === 'finger-bass') {
+    } else if (voiceMode === 'finger-bass') {
       osc1Gain.gain.value = 0.52;
       osc2Gain.gain.value = 0.26;
       subGain.gain.value = 0.38 + (this.knobs.k6SubMix / 127) * 0.35;
-    } else if (this.keyboardVoiceMode === 'slap-bass') {
+    } else if (voiceMode === 'slap-bass') {
       osc1Gain.gain.value = 0.45;
       osc2Gain.gain.value = 0.28;
       subGain.gain.value = 0.42 + (this.knobs.k6SubMix / 127) * 0.35;
-    } else if (this.keyboardVoiceMode === 'picked-bass') {
+    } else if (voiceMode === 'picked-bass') {
       osc1Gain.gain.value = 0.44;
       osc2Gain.gain.value = 0.36;
       subGain.gain.value = 0.32 + (this.knobs.k6SubMix / 127) * 0.35;
@@ -529,21 +627,21 @@ class SoundEngine {
       filter.frequency.setValueAtTime(Math.min(16000, targetCutoff * 1.45), now);
       filter.frequency.exponentialRampToValueAtTime(Math.max(80, targetCutoff), now + 0.16);
       filter.Q.setValueAtTime(this.getResonanceQ(), now);
-    } else if (this.keyboardVoiceMode === 'finger-bass') {
+    } else if (voiceMode === 'finger-bass') {
       // Warm plucked low-pass envelope
       const pluckPeak = Math.min(3400, Math.max(420, targetCutoff * 0.65));
       const sustainCutoff = Math.max(140, pluckPeak * 0.28);
       filter.frequency.setValueAtTime(pluckPeak, now);
       filter.frequency.exponentialRampToValueAtTime(sustainCutoff, now + 0.14);
       filter.Q.setValueAtTime(2.2 + (this.knobs.k2Resonance / 127) * 6, now);
-    } else if (this.keyboardVoiceMode === 'slap-bass') {
+    } else if (voiceMode === 'slap-bass') {
       // Aggressive slap & pop resonant filter snap
       const slapPeak = Math.min(7500, Math.max(1800, targetCutoff * 1.35));
       const sustainCutoff = Math.max(240, slapPeak * 0.22);
       filter.frequency.setValueAtTime(slapPeak, now);
       filter.frequency.exponentialRampToValueAtTime(sustainCutoff, now + 0.095);
       filter.Q.setValueAtTime(4.5 + (this.knobs.k2Resonance / 127) * 8, now);
-    } else if (this.keyboardVoiceMode === 'picked-bass') {
+    } else if (voiceMode === 'picked-bass') {
       // Bright plectrum bite decaying into gritty mid sustain
       const pickPeak = Math.min(5200, Math.max(1200, targetCutoff * 0.95));
       const sustainCutoff = Math.max(280, pickPeak * 0.38);
@@ -562,7 +660,7 @@ class SoundEngine {
     const vca = ctx.createGain();
     const velGain = (velocity / 127) * (isBassGuitar ? 0.56 : 0.42);
     const attackSec =
-      this.keyboardVoiceMode === 'fretless-bass'
+      voiceMode === 'fretless-bass'
         ? 0.018 + (this.knobs.k3Attack / 127) * 0.18
         : isBassGuitar
         ? 0.003 + (this.knobs.k3Attack / 127) * 0.08
@@ -570,7 +668,7 @@ class SoundEngine {
 
     vca.gain.setValueAtTime(0.0001, now);
     vca.gain.linearRampToValueAtTime(velGain, now + attackSec);
-    if (isBassGuitar && this.keyboardVoiceMode !== 'fretless-bass') {
+    if (isBassGuitar && voiceMode !== 'fretless-bass') {
       // Natural plucked string decay curve
       vca.gain.exponentialRampToValueAtTime(velGain * 0.58, now + attackSec + 0.22);
       vca.gain.exponentialRampToValueAtTime(velGain * 0.32, now + attackSec + 1.1);
@@ -580,7 +678,7 @@ class SoundEngine {
 
     // Add physical string attack transient (fret clank / pick click / finger thump)
     if (isBassGuitar) {
-      this.triggerBassStringTransient(ctx, now, freq, velocity / 127, this.keyboardVoiceMode);
+      this.triggerBassStringTransient(ctx, now, freq, velocity / 127, voiceMode);
     }
 
     osc1.connect(osc1Gain);
