@@ -184,7 +184,7 @@ export function exportLoopToMidiFile(
     bpm,
     `AKAI MPK mini - ${programName}`
   );
-  const blob = new Blob([midiBytes], { type: 'audio/midi' });
+  const blob = new Blob([midiBytes as unknown as BlobPart], { type: 'audio/midi' });
   const url = URL.createObjectURL(blob);
 
   const safeSlug = programName
