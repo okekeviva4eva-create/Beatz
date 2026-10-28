@@ -35,16 +35,16 @@ export const KEYBED_25: KeyDefinition[] = [
 
   // Octave 2 (Offsets 12..24)
   { offset: 12, noteName: 'C', isBlack: false, whiteIndex: 7, keyBinding: 'Q', arpLabelTop: 'ORDER', arpColor: 'white', arpAction: { type: 'mode', value: 'ORDER' } },
-  { offset: 13, noteName: 'C#', isBlack: true, whiteIndex: 7, keyBinding: '2', arpLabelTop: 'RAND', arpColor: 'white', arpAction: { type: 'mode', value: 'RAND' } },
+  { offset: 13, noteName: 'C#', isBlack: true, whiteIndex: 7, keyBinding: 'A', arpLabelTop: 'RAND', arpColor: 'white', arpAction: { type: 'mode', value: 'RAND' } },
   { offset: 14, noteName: 'D', isBlack: false, whiteIndex: 8, keyBinding: 'W', arpLabelTop: 'LATCH', arpColor: 'white', arpAction: { type: 'latch' } },
-  { offset: 15, noteName: 'D#', isBlack: true, whiteIndex: 8, keyBinding: '3', arpLabelTop: 'ARP', arpLabelBottom: 'OCT 1', arpColor: 'red', arpAction: { type: 'oct', value: 1 } },
+  { offset: 15, noteName: 'D#', isBlack: true, whiteIndex: 8, keyBinding: 'F', arpLabelTop: 'ARP', arpLabelBottom: 'OCT 1', arpColor: 'red', arpAction: { type: 'oct', value: 1 } },
   { offset: 16, noteName: 'E', isBlack: false, whiteIndex: 9, keyBinding: 'E', arpLabelTop: 'ARP', arpLabelBottom: 'OCT 2', arpColor: 'red', arpAction: { type: 'oct', value: 2 } },
   { offset: 17, noteName: 'F', isBlack: false, whiteIndex: 10, keyBinding: 'R', arpLabelTop: 'ARP', arpLabelBottom: 'OCT 3', arpColor: 'red', arpAction: { type: 'oct', value: 3 } },
-  { offset: 18, noteName: 'F#', isBlack: true, whiteIndex: 10, keyBinding: '5', arpLabelTop: 'ARP', arpLabelBottom: 'OCT 4', arpColor: 'red', arpAction: { type: 'oct', value: 4 } },
+  { offset: 18, noteName: 'F#', isBlack: true, whiteIndex: 10, keyBinding: 'K', arpLabelTop: 'ARP', arpLabelBottom: 'OCT 4', arpColor: 'red', arpAction: { type: 'oct', value: 4 } },
   { offset: 19, noteName: 'G', isBlack: false, whiteIndex: 11, keyBinding: 'T', arpLabelTop: 'SWING', arpLabelBottom: '50%', arpColor: 'white', arpAction: { type: 'swing', value: 50 } },
-  { offset: 20, noteName: 'G#', isBlack: true, whiteIndex: 11, keyBinding: '6', arpLabelTop: 'SWING', arpLabelBottom: '55%', arpColor: 'white', arpAction: { type: 'swing', value: 55 } },
+  { offset: 20, noteName: 'G#', isBlack: true, whiteIndex: 11, keyBinding: 'L', arpLabelTop: 'SWING', arpLabelBottom: '55%', arpColor: 'white', arpAction: { type: 'swing', value: 55 } },
   { offset: 21, noteName: 'A', isBlack: false, whiteIndex: 12, keyBinding: 'Y', arpLabelTop: 'SWING', arpLabelBottom: '57%', arpColor: 'white', arpAction: { type: 'swing', value: 57 } },
-  { offset: 22, noteName: 'A#', isBlack: true, whiteIndex: 12, keyBinding: '7', arpLabelTop: 'SWING', arpLabelBottom: '59%', arpColor: 'white', arpAction: { type: 'swing', value: 59 } },
+  { offset: 22, noteName: 'A#', isBlack: true, whiteIndex: 12, keyBinding: 'O', arpLabelTop: 'SWING', arpLabelBottom: '59%', arpColor: 'white', arpAction: { type: 'swing', value: 59 } },
   { offset: 23, noteName: 'B', isBlack: false, whiteIndex: 13, keyBinding: 'U', arpLabelTop: 'SWING', arpLabelBottom: '61%', arpColor: 'white', arpAction: { type: 'swing', value: 61 } },
   { offset: 24, noteName: 'C', isBlack: false, whiteIndex: 14, keyBinding: 'I', arpLabelTop: 'SWING', arpLabelBottom: '64%', arpColor: 'white', arpAction: { type: 'swing', value: 64 } },
 ];

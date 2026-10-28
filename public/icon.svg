@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="96" fill="#111215"/>
+  <rect x="28" y="28" width="456" height="456" rx="76" fill="#181a20" stroke="#e11d48" stroke-width="10"/>
+  <!-- 4 Red Backlit MPC Drum Pads (Top Half) -->
+  <rect x="68" y="68" width="82" height="82" rx="12" fill="#2a1418" stroke="#ef4444" stroke-width="6"/>
+  <rect x="170" y="68" width="82" height="82" rx="12" fill="#2a1418" stroke="#ef4444" stroke-width="6"/>
+  <rect x="272" y="68" width="82" height="82" rx="12" fill="#2a1418" stroke="#ef4444" stroke-width="6"/>
+  <rect x="374" y="68" width="70" height="82" rx="12" fill="#e11d48" stroke="#fda4af" stroke-width="5"/>
+  <!-- 4 Synth Keys (Bottom Half) -->
+  <rect x="68" y="182" width="84" height="254" rx="10" fill="#f4f4f5"/>
+  <rect x="164" y="182" width="84" height="254" rx="10" fill="#f4f4f5"/>
+  <rect x="260" y="182" width="84" height="254" rx="10" fill="#f4f4f5"/>
+  <rect x="356" y="182" width="88" height="254" rx="10" fill="#f4f4f5"/>
+  <!-- Sharp Black Keys -->
+  <rect x="126" y="182" width="52" height="150" rx="8" fill="#18181b"/>
+  <rect x="224" y="182" width="52" height="150" rx="8" fill="#18181b"/>
+  <rect x="322" y="182" width="52" height="150" rx="8" fill="#18181b"/>
+</svg>

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Volume2, Keyboard, Play, Square, Circle, Trash2, Sliders, Download, Grid } from 'lucide-react';
+import { Volume2, Keyboard, Play, Square, Sliders } from 'lucide-react';
 import {
   ArpMode,
   KEYBOARD_VOICE_OPTIONS,
@@ -35,8 +35,11 @@ import {
   PadVelocityConfig,
   PadVelocitySettingsPanel,
 } from './components/PadVelocitySettingsPanel';
+import { OfflineBanner, PWAInstallButton } from './components/PWAOfflineControls';
 
 type RecordedEvent = BeatRecordedEvent;
+
+const OFFLINE_SESSION_STORAGE_KEY = 'mpk_studio_offline_session_v2';
 
 const TIME_DIV_STEPS_PER_BEAT: Record<TimeDivision, number> = {
   '1/4': 1,
@@ -51,6 +54,18 @@ const TIME_DIV_STEPS_PER_BEAT: Record<TimeDivision, number> = {
 
 const SIXTEENTH_NOTE_BEATS = 0.25; // 1/16th note = 0.25 quarter-note beats
 const LOOP_LENGTH_BEATS = 8;       // 2 bars of 4/4 = 8 beats (32 sixteenth-note steps)
+
+// Default 2-bar (32-step) rhythmic groove patterns when a user clicks an MPC Pad to loop it
+const PAD_LOOP_PATTERNS_32: Record<number, number[]> = {
+  0: [0, 6, 8, 14, 16, 22, 24, 30], // Pad 1: Kick groove
+  1: [4, 12, 20, 28],               // Pad 2: Snare backbeat
+  2: [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30], // Pad 3: Steady 8th Hats
+  3: [2, 10, 18, 26],               // Pad 4: Upbeat Open Hats
+  4: [4, 11, 12, 20, 27, 28],       // Pad 5: Syncopated Clap / Perc
+  5: [3, 7, 15, 19, 23, 31],        // Pad 6: Rimshot / Cowbell accents
+  6: [0, 3, 8, 11, 16, 19, 24, 27], // Pad 7: Sub / Bass Pad drop groove
+  7: [0, 6, 12, 16, 22, 28],        // Pad 8: Rhodes / Chord Stabs
+};
 
 function quantizeEventsToSixteenthGrid(events: RecordedEvent[]): RecordedEvent[] {
   return events.map((ev) => {
@@ -125,6 +140,7 @@ export default function App() {
   // Demo Groove, 16-Step Drum Grid & Loop Recorder State
   const [demoPlaying, setDemoPlaying] = useState<boolean>(false);
   const [loopRecording, setLoopRecording] = useState<boolean>(false);
+  const [liveLatchMode, setLiveLatchMode] = useState<boolean>(true);
   const [autoQuantize, setAutoQuantize] = useState<boolean>(true);
   const [metronomeOn, setMetronomeOn] = useState<boolean>(false);
   const [recordedEvents, setRecordedEvents] = useState<RecordedEvent[]>([]);
@@ -137,7 +153,7 @@ export default function App() {
   });
   const [customPadLabels, setCustomPadLabels] = useState<Record<string, string>>({});
   const [stepGrid, setStepGrid] = useState<StepGridState>(() => ({
-    A: createPresetGridForProgram(1),
+    A: createEmptyGrid(),
     B: createEmptyGrid(),
   }));
   const [mutedPads, setMutedPads] = useState<Record<'A' | 'B', boolean[]>>(() => ({
@@ -152,17 +168,111 @@ export default function App() {
   const arpDirectionRef = useRef<1 | -1>(1);
   const tapTimesRef = useRef<number[]>([]);
   const loopStartRef = useRef<number>(performance.now());
+  const currentLoopBeatRef = useRef<number>(0);
   const recordedEventsRef = useRef<RecordedEvent[]>([]);
   const activeRecordedNotesRef = useRef<Map<number, { id: string; startMs: number }>>(new Map());
   const stepGridRef = useRef<StepGridState>(stepGrid);
   const mutedPadsRef = useRef<Record<'A' | 'B', boolean[]>>(mutedPads);
   const mutedTracksRef = useRef(mutedTracks);
   const padVelocityConfigRef = useRef<PadVelocityConfig>(padVelocityConfig);
+  currentLoopBeatRef.current = currentLoopBeat;
   recordedEventsRef.current = recordedEvents;
   stepGridRef.current = stepGrid;
   mutedPadsRef.current = mutedPads;
   mutedTracksRef.current = mutedTracks;
   padVelocityConfigRef.current = padVelocityConfig;
+
+  // Compute which pads (0..7) in current padBank are actively looping in recordedEvents
+  const loopingPads = React.useMemo(() => {
+    const active = new Set<number>();
+    recordedEvents.forEach((ev) => {
+      if (ev.type === 'pad' && (ev.bank || 'A') === padBank) {
+        active.add(ev.index);
+      }
+    });
+    return active;
+  }, [recordedEvents, padBank]);
+
+  // Restore saved offline session on initial mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(OFFLINE_SESSION_STORAGE_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (saved && typeof saved === 'object') {
+        if (typeof saved.programId === 'number') {
+          const foundProg =
+            PROGRAM_PRESETS.find((p) => p.id === saved.programId) || PROGRAM_PRESETS[0];
+          setProgram(foundProg);
+          soundEngine.setProgram(foundProg);
+        }
+        if (saved.keyboardVoice) {
+          setKeyboardVoice(saved.keyboardVoice);
+          soundEngine.setKeyboardVoiceMode(saved.keyboardVoice);
+        }
+        if (saved.knobs && typeof saved.knobs === 'object') {
+          setKnobs(saved.knobs);
+          soundEngine.updateKnobs(saved.knobs);
+        }
+        if (typeof saved.bpm === 'number' && saved.bpm >= 40 && saved.bpm <= 220) {
+          setBpm(saved.bpm);
+        }
+        if (saved.timeDivision) setTimeDivision(saved.timeDivision);
+        if (saved.arpMode) setArpMode(saved.arpMode);
+        if (saved.arpOctaves) setArpOctaves(saved.arpOctaves);
+        if (saved.swing) setSwing(saved.swing);
+        if (saved.padVelocityConfig) setPadVelocityConfig(saved.padVelocityConfig);
+        if (saved.stepGrid && saved.stepGrid.A && saved.stepGrid.B) {
+          setStepGrid(saved.stepGrid);
+        }
+        if (Array.isArray(saved.recordedEvents)) {
+          setRecordedEvents(saved.recordedEvents);
+        }
+        if (typeof saved.masterVol === 'number') {
+          setMasterVol(saved.masterVol);
+          soundEngine.setMasterVolume(saved.masterVol);
+        }
+      }
+    } catch {
+      // Ignore corrupt localStorage state
+    }
+  }, []);
+
+  // Automatically persist active studio session to localStorage for seamless offline reload
+  useEffect(() => {
+    try {
+      const payload = {
+        programId: program.id,
+        keyboardVoice,
+        knobs,
+        bpm,
+        timeDivision,
+        arpMode,
+        arpOctaves,
+        swing,
+        padVelocityConfig,
+        stepGrid,
+        recordedEvents,
+        masterVol,
+      };
+      localStorage.setItem(OFFLINE_SESSION_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [
+    program.id,
+    keyboardVoice,
+    knobs,
+    bpm,
+    timeDivision,
+    arpMode,
+    arpOctaves,
+    swing,
+    padVelocityConfig,
+    stepGrid,
+    recordedEvents,
+    masterVol,
+  ]);
 
   const baseMidiNote = 48 + octaveShift * 12; // Default C3 = 48
 
@@ -232,6 +342,136 @@ export default function App() {
     }
   }, []);
 
+  // Toggle an MPC Pad's continuous loop pattern in the live beat
+  const handleTogglePadLoop = useCallback(
+    (padIndex: number, vel = 116) => {
+      const padLabel =
+        padBank === 'A' ? program.padNamesA[padIndex] : program.padNamesB[padIndex];
+
+      // Clear any background 16-step demo preset grid so ONLY the pad(s) the user clicked will play
+      setStepGrid({
+        A: createEmptyGrid(),
+        B: createEmptyGrid(),
+      });
+
+      setRecordedEvents((prev) => {
+        const alreadyLooping = prev.some(
+          (ev) => ev.type === 'pad' && ev.index === padIndex && (ev.bank || 'A') === padBank
+        );
+
+        if (alreadyLooping) {
+          const remaining = prev.filter(
+            (ev) => !(ev.type === 'pad' && ev.index === padIndex && (ev.bank || 'A') === padBank)
+          );
+          if (remaining.length === 0) {
+            setDemoPlaying(false);
+          }
+          setLcdStatus(`STOPPED PAD ${padIndex + 1} LOOP (${padLabel.toUpperCase()})`);
+          return remaining;
+        }
+
+        const patternSteps = PAD_LOOP_PATTERNS_32[padIndex] || [0, 8, 16, 24];
+        const newPadEvents: RecordedEvent[] = patternSteps.map((step32) => ({
+          id: `latch-pad-${padBank}-${padIndex}-${step32}-${Date.now()}-${Math.random()}`,
+          beatOffset: step32 * 0.25,
+          type: 'pad',
+          index: padIndex,
+          bank: padBank,
+          velocity: vel,
+          durationBeats: 0.25,
+        }));
+
+        setDemoPlaying(true);
+        setLcdStatus(`PAD ${padIndex + 1} (${padLabel.toUpperCase()}) LOOPING IN BEAT`);
+        return [...prev, ...newPadEvents];
+      });
+
+      setMutedTracks((prev) => ({ ...prev, drums: false }));
+    },
+    [padBank, program]
+  );
+
+  // Layer / Join an Electric Bass Guitar groove into the currently playing beat
+  const handleJoinBassGroove = useCallback(
+    (bassVoice: KeyboardVoiceMode, rootMidi = 48) => {
+      const voiceToUse: KeyboardVoiceMode =
+        bassVoice === 'synth' ? 'finger-bass' : bassVoice;
+      setKeyboardVoice(voiceToUse);
+      soundEngine.setKeyboardVoiceMode(voiceToUse);
+
+      // Audition the root bass note immediately so the user hears the bass join in
+      soundEngine.noteOn(rootMidi, 118, voiceToUse);
+      setTimeout(() => soundEngine.noteOff(rootMidi), 220);
+
+      // Build a 2-bar (32 sixteenth-note) Electric Bass Guitar groove around rootMidi
+      const r = Math.max(36, Math.min(60, rootMidi));
+      const pattern: [number, number, number, number][] =
+        voiceToUse === 'slap-bass'
+          ? [
+              [0, r, 0.35, 124],
+              [2, r + 12, 0.25, 126],
+              [3, r, 0.25, 112],
+              [6, r + 3, 0.5, 120],
+              [8, r + 5, 0.35, 124],
+              [10, r + 17, 0.25, 126],
+              [12, r + 7, 0.5, 120],
+              [14, r + 19, 0.25, 124],
+              [16, r, 0.35, 124],
+              [18, r + 12, 0.25, 126],
+              [20, r + 3, 0.5, 118],
+              [22, r + 5, 0.35, 122],
+              [24, r + 7, 0.35, 125],
+              [26, r + 19, 0.25, 126],
+              [28, r + 5, 0.5, 120],
+              [30, r + 3, 0.35, 118],
+            ]
+          : voiceToUse === 'picked-bass'
+          ? Array.from({ length: 16 }, (_, i) => {
+              const step32 = i * 2;
+              const note =
+                step32 < 8 ? r : step32 < 16 ? r + 7 : step32 < 24 ? r + 5 : r + 3;
+              return [step32, note, 0.35, step32 % 4 === 0 ? 122 : 108];
+            })
+          : [
+              // Fingered P-Bass / Fretless Bass groove
+              [0, r, 0.75, 122],
+              [3, r + 3, 0.5, 114],
+              [6, r + 5, 0.5, 118],
+              [8, r + 7, 0.75, 124],
+              [12, r + 3, 0.75, 116],
+              [16, r, 0.75, 122],
+              [19, r + 3, 0.5, 114],
+              [22, r + 7, 0.5, 120],
+              [24, r + 5, 0.75, 122],
+              [28, r + 2, 0.75, 116],
+            ];
+
+      const bassEvents: RecordedEvent[] = pattern.map(([step32, midi, dur, vel]) => ({
+        id: `latch-bass-${voiceToUse}-${step32}-${Date.now()}-${Math.random()}`,
+        beatOffset: step32 * 0.25,
+        type: 'note',
+        index: midi,
+        velocity: vel,
+        durationBeats: dur,
+        voiceMode: voiceToUse,
+      }));
+
+      setRecordedEvents((prev) => {
+        const withoutOldBass = prev.filter(
+          (ev) => !(ev.type === 'note' && ev.voiceMode && ev.voiceMode !== 'synth')
+        );
+        return [...withoutOldBass, ...bassEvents];
+      });
+
+      setMutedTracks((prev) => ({ ...prev, bass: false }));
+      setDemoPlaying(true);
+      const voiceLabel =
+        KEYBOARD_VOICE_OPTIONS.find((v) => v.id === voiceToUse)?.label || 'Bass Guitar';
+      setLcdStatus(`${voiceLabel.toUpperCase()} JOINED THE BEAT`);
+    },
+    []
+  );
+
   // Trigger MPC Pad (0..7)
   // rawOrVelocity: if <= 1.0, treated as normalized strike force (0..1); if > 1, converted from raw MIDI velocity
   const handlePadDown = useCallback(
@@ -266,15 +506,11 @@ export default function App() {
         timestamp: Date.now(),
       });
 
-      setLcdStatus(
-        `PAD ${padIndex + 1} [${padBank}] · ${padLabel.toUpperCase()} · VEL ${vel} (${
-          fullLevel ? 'FULL' : padVelocityConfig.curve.toUpperCase()
-        })`
-      );
-
       if (loopRecording) {
-        const elapsedSec = (performance.now() - loopStartRef.current) / 1000;
-        const beatOffset = ((elapsedSec * (bpm / 60)) % 8 + 8) % 8;
+        const rawBeat = currentLoopBeatRef.current;
+        const beatOffset = autoQuantize
+          ? ((Math.round(rawBeat / 0.25) * 0.25) % 8 + 8) % 8
+          : rawBeat;
         setRecordedEvents((prev) => [
           ...prev,
           {
@@ -284,8 +520,22 @@ export default function App() {
             index: padIndex,
             bank: padBank,
             velocity: vel,
+            durationBeats: 0.25,
           },
         ]);
+        if (!demoPlaying) setDemoPlaying(true);
+        setLcdStatus(
+          `REC PAD ${padIndex + 1} [${padBank}] · ${padLabel.toUpperCase()} · VEL ${vel}`
+        );
+      } else if (liveLatchMode) {
+        // Live Pad Latch mode: clicking a pad keeps it playing in the beat loop!
+        handleTogglePadLoop(padIndex, vel);
+      } else {
+        setLcdStatus(
+          `PAD ${padIndex + 1} [${padBank}] · ${padLabel.toUpperCase()} · VEL ${vel} (${
+            fullLevel ? 'FULL' : padVelocityConfig.curve.toUpperCase()
+          })`
+        );
       }
     },
     [
@@ -297,7 +547,10 @@ export default function App() {
       program,
       noteRepeat,
       loopRecording,
-      bpm,
+      autoQuantize,
+      demoPlaying,
+      liveLatchMode,
+      handleTogglePadLoop,
     ]
   );
 
@@ -335,12 +588,13 @@ export default function App() {
 
       const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
       const name = `${noteNames[midiNote % 12]}${Math.floor(midiNote / 12) - 1}`;
-      setLcdStatus(`NOTE ${name} (${midiNote}) · VEL ${vel}`);
 
       if (loopRecording && !arpOn) {
         const nowMs = performance.now();
-        const elapsedSec = (nowMs - loopStartRef.current) / 1000;
-        const beatOffset = ((elapsedSec * (bpm / 60)) % 8 + 8) % 8;
+        const rawBeat = currentLoopBeatRef.current;
+        const beatOffset = autoQuantize
+          ? ((Math.round(rawBeat / 0.25) * 0.25) % 8 + 8) % 8
+          : rawBeat;
         const eventId = `${Date.now()}-${Math.random()}`;
         activeRecordedNotesRef.current.set(midiNote, { id: eventId, startMs: nowMs });
         setRecordedEvents((prev) => [
@@ -355,9 +609,28 @@ export default function App() {
             voiceMode: keyboardVoice,
           },
         ]);
+        if (!demoPlaying) setDemoPlaying(true);
+        setLcdStatus(`REC NOTE ${name} (${keyboardVoice.toUpperCase()}) · VEL ${vel}`);
+      } else if (liveLatchMode && keyboardVoice !== 'synth' && !arpOn) {
+        // In Live Latch Mode, pressing any Bass Guitar key joins/shifts the Bass groove in the playing beat!
+        handleJoinBassGroove(keyboardVoice, midiNote);
+      } else {
+        setLcdStatus(`NOTE ${name} (${midiNote}) · VEL ${vel}`);
       }
     },
-    [arpConfigHold, handleArpFunctionSelect, fullLevel, arpOn, arpLatch, loopRecording, bpm, keyboardVoice]
+    [
+      arpConfigHold,
+      handleArpFunctionSelect,
+      fullLevel,
+      arpOn,
+      arpLatch,
+      loopRecording,
+      autoQuantize,
+      demoPlaying,
+      liveLatchMode,
+      keyboardVoice,
+      handleJoinBassGroove,
+    ]
   );
 
   const handleNoteUp = useCallback(
@@ -639,10 +912,10 @@ export default function App() {
       '2': 1,
       '3': 2,
       '4': 3,
-      '8': 4,
-      '9': 5,
-      '0': 6,
-      '-': 7,
+      '5': 4,
+      '6': 5,
+      '7': 6,
+      '8': 7,
     };
 
     const downKeys = new Set<string>();
@@ -712,7 +985,7 @@ export default function App() {
     { index: 3, label: 'PAD 4' },
   ];
 
-  const PAD_SHORTCUT_KEYS = ['1', '2', '3', '4', '8', '9', '0', '-'];
+  const PAD_SHORTCUT_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8'];
 
   const handleGlobalMouseOver = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement | null;
@@ -821,12 +1094,19 @@ export default function App() {
             <span className="text-[8px] font-mono-tabular uppercase tracking-wider text-zinc-400/90 group-hover:text-zinc-200 transition-colors">
               {padCCMode ? `CC ${20 + padIndex}` : padProgChangeMode ? `PC ${padIndex + 1}` : `BANK ${padBank}`}
             </span>
-            {showKeyShortcuts && !isPressed && (
-              <span className="text-[8px] font-mono-tabular font-bold px-1 rounded bg-zinc-900/80 text-zinc-400 group-hover:text-white group-hover:bg-red-600/80 transition-colors">
-                {shortcutKey}
+            {loopingPads.has(padIndex) ? (
+              <span className="text-[7.5px] font-mono-tabular font-extrabold px-1 py-0.2 rounded bg-red-600 text-white shadow-[0_0_6px_#ef4444]">
+                LOOP
               </span>
+            ) : (
+              showKeyShortcuts &&
+              !isPressed && (
+                <span className="text-[8px] font-mono-tabular font-bold px-1 rounded bg-zinc-900/80 text-zinc-400 group-hover:text-white group-hover:bg-red-600/80 transition-colors">
+                  {shortcutKey}
+                </span>
+              )
             )}
-            {isPressed && (
+            {isPressed && !loopingPads.has(padIndex) && (
               <span
                 className={`w-1.5 h-1.5 rounded-full ${
                   padBank === 'A' ? 'bg-red-400 shadow-[0_0_6px_#ef4444]' : 'bg-emerald-400 shadow-[0_0_6px_#10b981]'
@@ -852,8 +1132,11 @@ export default function App() {
       {/* Floating Hardware Function Inspector Callout */}
       <HardwareHoverCallout info={hoveredControl} />
 
+      {/* Offline Connectivity Banner */}
+      <OfflineBanner />
+
       {/* Top Bar Contract: Zone 1 Brand — Zone 2 Preset Links — Zone 3 Primary Demo Action */}
-      <header className="w-full border-b border-zinc-800/80 bg-[#15171b] px-6 py-3 flex items-center justify-between gap-8">
+      <header className="w-full border-b border-zinc-800/80 bg-[#15171b] px-6 py-3 flex items-center justify-between gap-4">
         <div className="flex items-center gap-3 shrink-0">
           <span className="font-display text-lg font-extrabold tracking-tight text-white whitespace-nowrap">
             AKAI <span className="text-red-500">MPK mini</span> Studio
@@ -861,7 +1144,7 @@ export default function App() {
         </div>
 
         {/* 4 Hardware Program Preset Selectors */}
-        <nav className="hidden md:flex items-center gap-6 text-xs font-semibold text-zinc-400">
+        <nav className="hidden xl:flex items-center gap-5 text-xs font-semibold text-zinc-400">
           {PROGRAM_PRESETS.map((p) => (
             <button
               key={p.id}
@@ -881,8 +1164,10 @@ export default function App() {
           ))}
         </nav>
 
-        {/* Primary Action: Toggle Live Demo Beat */}
-        <div className="flex items-center gap-3 shrink-0">
+        {/* Primary Action: Offline Status + Install PWA + Toggle Live Demo Beat */}
+        <div className="flex items-center gap-2.5 shrink-0">
+          <PWAInstallButton />
+
           <button
             type="button"
             data-hw-title={demoPlaying ? 'STOP STUDIO DEMO GROOVE' : 'PLAY STUDIO DEMO GROOVE'}
@@ -891,6 +1176,14 @@ export default function App() {
             onClick={() => {
               setDemoPlaying((prev) => {
                 const next = !prev;
+                if (next) {
+                  const hasGridSteps =
+                    stepGrid.A.some((row) => row.some((v) => v > 0)) ||
+                    stepGrid.B.some((row) => row.some((v) => v > 0));
+                  if (recordedEvents.length === 0 && !hasGridSteps) {
+                    setStepGrid((g) => ({ ...g, A: createPresetGridForProgram(program.id) }));
+                  }
+                }
                 setLcdStatus(next ? 'DEMO GROOVE: PLAYING' : 'DEMO GROOVE: STOPPED');
                 return next;
               });
@@ -960,7 +1253,12 @@ export default function App() {
                     onClick={() => {
                       setKeyboardVoice(opt.id);
                       soundEngine.setKeyboardVoiceMode(opt.id);
-                      setLcdStatus(`KEY VOICE: ${opt.label.toUpperCase()}`);
+                      if (opt.id !== 'synth' && liveLatchMode) {
+                        // Automatically join this Bass Guitar into the playing beat!
+                        handleJoinBassGroove(opt.id, 48);
+                      } else {
+                        setLcdStatus(`KEY VOICE: ${opt.label.toUpperCase()}`);
+                      }
                     }}
                     className={`px-2 py-1 rounded text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
                       isSelected
@@ -999,101 +1297,6 @@ export default function App() {
               </span>
             </div>
 
-            {/* Loop Overdub Controls */}
-            <div className="flex items-center gap-1.5 bg-[#111216] border border-zinc-800 rounded-lg p-1">
-              <button
-                type="button"
-                data-hw-title={loopRecording ? 'STOP LOOP RECORDING' : 'RECORD 2-BAR OVERDUB LOOP'}
-                data-hw-func="Records live MPC pad hits and synth keyboard notes into a repeating 2-bar (8-beat) overdub loop."
-                data-hw-state={loopRecording ? 'RECORDING OVERDUB' : `${recordedEvents.length} EVENTS RECORDED`}
-                onClick={() => {
-                  if (!loopRecording) {
-                    loopStartRef.current = performance.now();
-                    setLoopRecording(true);
-                    setLcdStatus('LOOP REC: OVERDUBBING');
-                  } else {
-                    setLoopRecording(false);
-                    if (autoQuantize) {
-                      setRecordedEvents((prev) => {
-                        const quantized = quantizeEventsToSixteenthGrid(prev);
-                        setLcdStatus(
-                          `LOOP REC: QUANTIZED TO 1/16 GRID (${quantized.length} EVENTS)`
-                        );
-                        return quantized;
-                      });
-                    } else {
-                      setLcdStatus(`LOOP REC: LOCKED (${recordedEvents.length} EVENTS)`);
-                    }
-                  }
-                }}
-                className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
-                  loopRecording
-                    ? 'bg-red-600 text-white shadow-[0_0_10px_rgba(239,68,68,0.6)]'
-                    : 'text-zinc-300 hover:text-white hover:bg-zinc-800'
-                }`}
-              >
-                <Circle className="w-3 h-3 fill-current" />
-                {loopRecording ? 'Stop Recording' : 'Record Loop'}
-              </button>
-
-              {/* Auto-Quantize (1/16 Grid) Toggle */}
-              <button
-                type="button"
-                data-hw-title="AUTO-QUANTIZE (1/16 NOTE GRID)"
-                data-hw-func="Automatically snaps all recorded loop pad and synth note timings to the nearest 1/16-note subdivision when recording stops."
-                data-hw-state={autoQuantize ? 'ENABLED (1/16 SNAP)' : 'OFF (FREE TIMING)'}
-                onClick={() => {
-                  setAutoQuantize((prev) => {
-                    const next = !prev;
-                    if (next && !loopRecording && recordedEvents.length > 0) {
-                      setRecordedEvents((curr) => quantizeEventsToSixteenthGrid(curr));
-                      setLcdStatus('AUTO-QUANTIZE 1/16: ON (LOOP SNAPPED)');
-                    } else {
-                      setLcdStatus(`AUTO-QUANTIZE (1/16 GRID): ${next ? 'ON' : 'OFF'}`);
-                    }
-                    return next;
-                  });
-                }}
-                className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
-                  autoQuantize
-                    ? 'bg-red-600/20 text-red-300 border border-red-500/50 hover:bg-red-600/30'
-                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
-                }`}
-              >
-                <Grid className="w-3.5 h-3.5" />
-                <span>Quantize 1/16: {autoQuantize ? 'ON' : 'OFF'}</span>
-              </button>
-
-              {recordedEvents.length > 0 && (
-                <button
-                  type="button"
-                  data-hw-title="CLEAR RECORDED LOOP"
-                  data-hw-func="Erases all overdubbed events from the 2-bar loop recorder."
-                  data-hw-state={`${recordedEvents.length} EVENTS`}
-                  onClick={() => {
-                    setRecordedEvents([]);
-                    setLcdStatus('LOOP CLEARED');
-                  }}
-                  className="px-2 py-1 rounded text-xs font-medium text-zinc-400 hover:text-red-400 hover:bg-zinc-800 flex items-center gap-1 cursor-pointer whitespace-nowrap"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>Clear ({recordedEvents.length})</span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={handleExportMidi}
-                data-hw-title="EXPORT STANDARD MIDI FILE (.MID)"
-                data-hw-func="Downloads your active 16-step drum sequencer pattern and recorded loop events as a multi-channel Standard MIDI File (.mid)."
-                data-hw-state={`${bpm} BPM · FORMAT 0`}
-                className="px-2.5 py-1 rounded text-xs font-semibold bg-zinc-800/90 hover:bg-zinc-700 hover:border-red-500/50 border border-transparent text-zinc-100 flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap"
-              >
-                <Download className="w-3.5 h-3.5 text-red-400" />
-                <span>Export MIDI (.mid)</span>
-              </button>
-            </div>
-
             {/* MPC Pad Velocity Curve Settings Toggle */}
             <button
               type="button"
@@ -1116,7 +1319,7 @@ export default function App() {
               type="button"
               onClick={() => setShowKeyShortcuts((prev) => !prev)}
               data-hw-title="COMPUTER KEYBOARD SHORTCUT LABELS"
-              data-hw-func="Shows or hides the computer key bindings on the 25 piano keys (Z–M, Q–I) and 8 MPC drum pads (1–4, 8–-)."
+              data-hw-func="Shows or hides the computer key bindings on the 25 piano keys (Z–M, Q–I) and 8 MPC drum pads (1–8)."
               data-hw-state={showKeyShortcuts ? 'VISIBLE' : 'HIDDEN'}
               className={`px-3 py-1.5 rounded-lg border text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
                 showKeyShortcuts
@@ -1603,9 +1806,9 @@ export default function App() {
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-semibold text-zinc-300">Controls</span>
             <span aria-hidden="true">·</span>
-            <span>Keys: Z–M (Lower Octave) &amp; Q–I (Upper Octave)</span>
+            <span>Keys: Z–M (Lower Octave) &amp; Q–I / A,F,K,L,O (Upper Octave)</span>
             <span aria-hidden="true">·</span>
-            <span>Pads: 1–4 &amp; 8–-</span>
+            <span>Pads: 1–8</span>
             <span aria-hidden="true">·</span>
             <span>Octave Shift: Left/Right Arrows</span>
           </div>
@@ -1654,14 +1857,17 @@ export default function App() {
         <BeatStudioRecorder
           bpm={bpm}
           program={program}
+          padBank={padBank}
           keyboardVoice={keyboardVoice}
-          demoPlaying={demoPlaying}
+          loopPlaying={demoPlaying}
           loopRecording={loopRecording}
+          liveLatchMode={liveLatchMode}
           autoQuantize={autoQuantize}
           metronomeOn={metronomeOn}
           currentLoopBeat={currentLoopBeat}
           recordedEvents={recordedEvents}
           mutedTracks={mutedTracks}
+          loopingPads={loopingPads}
           onTogglePlay={() => {
             setDemoPlaying((prev) => {
               const next = !prev;
@@ -1687,7 +1893,20 @@ export default function App() {
               return next;
             });
           }}
-          onToggleAutoQuantize={() => {
+          onToggleLiveLatchMode={() => {
+            setLiveLatchMode((prev) => {
+              const next = !prev;
+              setLcdStatus(
+                next
+                  ? 'LIVE PAD & BASS LATCH: ON (CLICK PAD OR BASS TO LOOP)'
+                  : 'LIVE PAD & BASS LATCH: OFF (ONE-SHOT MODE)'
+              );
+              return next;
+            });
+          }}
+          onTogglePadLoop={(padIdx) => handleTogglePadLoop(padIdx, 118)}
+          onJoinBassGroove={(bassVoice, rootMidi) => handleJoinBassGroove(bassVoice, rootMidi ?? 48)}
+          onToggleQuantize={() => {
             setAutoQuantize((prev) => {
               const next = !prev;
               if (next && recordedEvents.length > 0 && !loopRecording) {
@@ -1712,6 +1931,17 @@ export default function App() {
             });
           }}
           onClearTrack={(track) => {
+            if (track === 'all') {
+              setRecordedEvents([]);
+              setStepGrid({ A: createEmptyGrid(), B: createEmptyGrid() });
+              setLoopRecording(false);
+              setDemoPlaying(false);
+              setLcdStatus('ALL RECORDED BEAT TRACKS CLEARED');
+              return;
+            }
+            if (track === 'drums') {
+              setStepGrid({ A: createEmptyGrid(), B: createEmptyGrid() });
+            }
             setRecordedEvents((prev) =>
               prev.filter((ev) => {
                 if (track === 'drums') return ev.type !== 'pad';
@@ -1722,72 +1952,25 @@ export default function App() {
             );
             setLcdStatus(`CLEARED ${track.toUpperCase()} TRACK`);
           }}
-          onClearAll={() => {
-            setRecordedEvents([]);
-            setLoopRecording(false);
-            setLcdStatus('ALL RECORDED BEAT TRACKS CLEARED');
+          onAddQuickEvent={(ev) => {
+            setRecordedEvents((prev) => [...prev, ev]);
+            if (!demoPlaying) setDemoPlaying(true);
           }}
-          onAddQuickStep={(track, stepIndex32) => {
-            const beatOffset = Number((stepIndex32 * 0.25).toFixed(4));
-            if (track === 'drums') {
-              const padIdx = stepIndex32 % 4 === 0 ? 0 : stepIndex32 % 4 === 2 ? 1 : 2;
-              soundEngine.triggerPad(padIdx, 'A', 115);
-              setRecordedEvents((prev) => [
-                ...prev,
-                {
-                  id: `quick-drum-${Date.now()}-${Math.random()}`,
-                  beatOffset,
-                  type: 'pad',
-                  index: padIdx,
-                  bank: 'A',
-                  velocity: 115,
-                  durationBeats: 0.25,
-                },
-              ]);
-            } else if (track === 'bass') {
-              const bassNotes = [36, 36, 39, 41, 43, 41, 39, 38]; // C2 minor groove
-              const midiNote = bassNotes[Math.floor(stepIndex32 / 4) % bassNotes.length];
-              const bassVoice: KeyboardVoiceMode =
-                keyboardVoice !== 'synth' ? keyboardVoice : 'finger-bass';
-              soundEngine.noteOn(midiNote, 118, bassVoice);
-              setTimeout(() => soundEngine.noteOff(midiNote), 180);
-              setRecordedEvents((prev) => [
-                ...prev,
-                {
-                  id: `quick-bass-${Date.now()}-${Math.random()}`,
-                  beatOffset,
-                  type: 'note',
-                  index: midiNote,
-                  velocity: 118,
-                  durationBeats: 0.5,
-                  voiceMode: bassVoice,
-                },
-              ]);
-            } else {
-              const synthNotes = [60, 63, 67, 70, 65, 68, 72, 67];
-              const midiNote = synthNotes[Math.floor(stepIndex32 / 4) % synthNotes.length];
-              soundEngine.noteOn(midiNote, 108, 'synth');
-              setTimeout(() => soundEngine.noteOff(midiNote), 200);
-              setRecordedEvents((prev) => [
-                ...prev,
-                {
-                  id: `quick-synth-${Date.now()}-${Math.random()}`,
-                  beatOffset,
-                  type: 'note',
-                  index: midiNote,
-                  velocity: 108,
-                  durationBeats: 0.5,
-                  voiceMode: 'synth',
-                },
-              ]);
-            }
+          onUndoLastEvent={() => {
+            setRecordedEvents((prev) => prev.slice(0, -1));
+            setLcdStatus('UNDID LAST BEAT EVENT');
           }}
           onDeleteEvent={(eventId) => {
             setRecordedEvents((prev) => prev.filter((e) => e.id !== eventId));
           }}
-          onSelectVoice={(voice) => {
+          onSelectKeyboardVoice={(voice) => {
             setKeyboardVoice(voice);
             soundEngine.setKeyboardVoiceMode(voice);
+            if (voice !== 'synth' && liveLatchMode) {
+              handleJoinBassGroove(voice, 48);
+            } else {
+              setLcdStatus(`KEYBOARD VOICE: ${voice.toUpperCase()}`);
+            }
           }}
           onLoadStarterBeat={(presetId) => {
             const events: RecordedEvent[] = [];
@@ -1823,7 +2006,7 @@ export default function App() {
             if (presetId === 'boombap') {
               setBpm(94);
               selectProgram(1);
-              setStepGrid((prev) => ({ ...prev, A: createPresetGridForProgram(1) }));
+              setStepGrid({ A: createEmptyGrid(), B: createEmptyGrid() });
               // Classic Boom-Bap Drums + Fingered P-Bass + Rhodes/Lead Chords
               [0, 3, 6, 8, 11, 16, 19, 22, 24, 27].forEach((s) => pushPad(s, 0, 124));
               [4, 12, 20, 28].forEach((s) => pushPad(s, 1, 122));
@@ -1853,7 +2036,7 @@ export default function App() {
             } else if (presetId === 'funk-slap') {
               setBpm(108);
               selectProgram(3);
-              setStepGrid((prev) => ({ ...prev, A: createPresetGridForProgram(3) }));
+              setStepGrid({ A: createEmptyGrid(), B: createEmptyGrid() });
               [0, 6, 8, 14, 16, 22, 24, 30].forEach((s) => pushPad(s, 0, 125));
               [4, 12, 20, 28].forEach((s) => pushPad(s, 1, 124));
               for (let s = 0; s < 32; s += 2) pushPad(s, 2, 105);
@@ -1885,7 +2068,7 @@ export default function App() {
             } else if (presetId === 'trap') {
               setBpm(136);
               selectProgram(1);
-              setStepGrid((prev) => ({ ...prev, A: createPresetGridForProgram(1) }));
+              setStepGrid({ A: createEmptyGrid(), B: createEmptyGrid() });
               [0, 7, 10, 16, 23, 26].forEach((s) => pushPad(s, 0, 127));
               [8, 24].forEach((s) => pushPad(s, 1, 126));
               for (let s = 0; s < 32; s++) pushPad(s, 2, s % 2 === 0 ? 116 : 94);
@@ -1905,7 +2088,7 @@ export default function App() {
               // Synthwave + Picked Bass
               setBpm(116);
               selectProgram(2);
-              setStepGrid((prev) => ({ ...prev, A: createPresetGridForProgram(2) }));
+              setStepGrid({ A: createEmptyGrid(), B: createEmptyGrid() });
               [0, 8, 16, 24].forEach((s) => pushPad(s, 0, 124));
               [4, 12, 20, 28].forEach((s) => pushPad(s, 1, 124));
               for (let s = 0; s < 32; s += 2) pushPad(s, 2, 104);

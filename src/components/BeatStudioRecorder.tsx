@@ -12,10 +12,12 @@ import {
   Bell,
   Grid,
   RotateCcw,
-  Plus,
   Layers,
+  Repeat,
+  Guitar,
 } from 'lucide-react';
 import {
+  KEYBOARD_VOICE_OPTIONS,
   KeyboardVoiceMode,
   ProgramPreset,
   soundEngine,
@@ -44,17 +46,23 @@ export interface RecordedAudioTake {
 
 interface BeatStudioRecorderProps {
   program: ProgramPreset;
+  padBank: 'A' | 'B';
   bpm: number;
   keyboardVoice: KeyboardVoiceMode;
   loopPlaying: boolean;
   loopRecording: boolean;
+  liveLatchMode: boolean;
   autoQuantize: boolean;
   metronomeOn: boolean;
   currentLoopBeat: number; // 0..8
   recordedEvents: BeatRecordedEvent[];
   mutedTracks: { drums: boolean; bass: boolean; synth: boolean };
+  loopingPads: Set<number>;
   onTogglePlay: () => void;
   onToggleRecord: () => void;
+  onToggleLiveLatchMode: () => void;
+  onTogglePadLoop: (padIndex: number) => void;
+  onJoinBassGroove: (bassVoice: KeyboardVoiceMode, rootMidi?: number) => void;
   onToggleQuantize: () => void;
   onToggleMetronome: () => void;
   onSelectKeyboardVoice: (voice: KeyboardVoiceMode) => void;
@@ -79,17 +87,23 @@ function formatMidiNote(midi: number, isBass = false): string {
 
 export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
   program,
+  padBank,
   bpm,
   keyboardVoice,
   loopPlaying,
   loopRecording,
+  liveLatchMode,
   autoQuantize,
   metronomeOn,
   currentLoopBeat,
   recordedEvents,
   mutedTracks,
+  loopingPads,
   onTogglePlay,
   onToggleRecord,
+  onToggleLiveLatchMode,
+  onTogglePadLoop,
+  onJoinBassGroove,
   onToggleQuantize,
   onToggleMetronome,
   onSelectKeyboardVoice,
@@ -115,6 +129,7 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
     (e) => e.type === 'note' && (!e.voiceMode || e.voiceMode === 'synth')
   );
 
+  const activeBassVoiceInLoop = bassEvents[0]?.voiceMode;
   const playheadPercent = Math.max(0, Math.min(100, (currentLoopBeat / 8) * 100));
 
   const handleToggleMasterAudioRecord = async () => {
@@ -160,20 +175,37 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <h2 className="font-display text-base font-bold text-white tracking-tight">
-                Multi-Track Beat Maker &amp; Loop Recorder
+                Multi-Track Beat Maker &amp; Live Pad/Bass Looper
               </h2>
               <span className="text-xs font-mono-tabular text-zinc-400">
-                · 2 Bars (8 Beats) · {recordedEvents.length} Recorded Events
+                · 2 Bars (8 Beats) · {recordedEvents.length} Events
               </span>
             </div>
             <p className="text-xs text-zinc-400">
-              Layer Drums, Electric Bass Guitar, and Poly Synth in real time, or click any step on the 3-track timeline to build beats.
+              Click any MPC Pad to start it looping continuously, then click any Bass Guitar or key so it immediately joins the play.
             </p>
           </div>
         </div>
 
         {/* Transport & Recording Buttons */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* Live Pad & Bass Latch Toggle */}
+          <button
+            type="button"
+            onClick={onToggleLiveLatchMode}
+            data-hw-title="LIVE PAD & BASS AUTO-LOOP LATCH"
+            data-hw-func="When ON, clicking any MPC Drum Pad keeps that pad sound playing in a continuous rhythm loop, and selecting or playing a Bass Guitar immediately joins the playing beat."
+            data-hw-state={liveLatchMode ? 'AUTO-LOOP LATCH: ON' : 'ONE-SHOT MODE'}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap border ${
+              liveLatchMode
+                ? 'bg-emerald-600/25 border-emerald-400 text-emerald-200 shadow-[0_0_12px_rgba(16,185,129,0.3)]'
+                : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:text-white'
+            }`}
+          >
+            <Repeat className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Click Pad/Bass to Loop: {liveLatchMode ? 'ON' : 'OFF'}</span>
+          </button>
+
           {/* Play / Stop Beat Loop */}
           <button
             type="button"
@@ -282,12 +314,64 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
         </div>
       </div>
 
+      {/* ===================================================================== */}
+      {/* LIVE LOOP STATUS STRIP (References Hardware Pads & Key Voice Above)   */}
+      {/* ===================================================================== */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-[#101217] border border-zinc-800/90 rounded-lg px-3.5 py-2.5 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-mono-tabular font-bold uppercase tracking-wider text-zinc-400">
+            Active Pad Loops [Bank {padBank}]:
+          </span>
+          {loopingPads.size === 0 ? (
+            <span className="text-zinc-500">
+              None — click any <strong className="text-zinc-300">MPC Pad (1–8)</strong> on the controller above to loop its sound
+            </span>
+          ) : (
+            Array.from(loopingPads)
+              .sort((a, b) => a - b)
+              .map((padIdx) => {
+                const padName =
+                  padBank === 'A' ? program.padNamesA[padIdx] : program.padNamesB[padIdx];
+                return (
+                  <button
+                    key={padIdx}
+                    type="button"
+                    onClick={() => onTogglePadLoop(padIdx)}
+                    data-hw-title={`STOP PAD ${padIdx + 1} LOOP`}
+                    data-hw-func={`Stops PAD ${padIdx + 1} (${padName}) from looping in the beat.`}
+                    className="px-2 py-0.5 rounded bg-red-600/25 border border-red-500/70 text-red-200 font-mono-tabular font-bold text-[11px] flex items-center gap-1.5 hover:bg-red-600/40 cursor-pointer"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-ping" />
+                    <span>
+                      PAD {padIdx + 1}: {padName} ×
+                    </span>
+                  </button>
+                );
+              })
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 font-mono-tabular">
+          <Guitar className="w-3.5 h-3.5 text-amber-400" />
+          <span className="uppercase tracking-wider text-zinc-400 font-bold">Bass Line:</span>
+          {bassEvents.length > 0 ? (
+            <span className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-500/50 text-amber-300 font-bold text-[11px]">
+              {activeBassVoiceInLoop?.toUpperCase()} JOINED ({bassEvents.length} notes)
+            </span>
+          ) : (
+            <span className="text-zinc-500">
+              Select a <strong className="text-amber-300">Bass Guitar</strong> in <strong className="text-zinc-300">KEY VOICE</strong> above to join the beat
+            </span>
+          )}
+        </div>
+      </div>
+
       {/* One-Click "Create Beat" Starter Templates & Quick Actions Bar */}
       <div className="flex flex-wrap items-center justify-between gap-2 bg-[#111318] border border-zinc-800/80 rounded-lg px-3 py-2">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-[10px] font-mono-tabular font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1 mr-1">
             <Sparkles className="w-3 h-3 text-red-400" />
-            Instant Beat Builders:
+            Full Beat Combos:
           </span>
 
           <button
@@ -332,7 +416,7 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5">
-          {recordedEvents.length > 0 && (
+          {(recordedEvents.length > 0 || loopingPads.size > 0) && (
             <>
               <button
                 type="button"
@@ -348,7 +432,7 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
                 type="button"
                 onClick={() => onClearTrack('all')}
                 data-hw-title="CLEAR ENTIRE BEAT TIMELINE"
-                data-hw-func="Clears all recorded events across Drums, Bass Guitar, and Synth tracks."
+                data-hw-func="Clears all looping pads and recorded events across Drums, Bass Guitar, and Synth tracks."
                 className="px-2 py-1 rounded bg-zinc-800/80 hover:bg-red-950/70 text-xs font-medium text-zinc-300 hover:text-red-300 flex items-center gap-1 cursor-pointer"
               >
                 <Trash2 className="w-3 h-3" />
@@ -431,7 +515,7 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
                 </div>
               </div>
               <span className="text-[10px] font-mono-tabular text-zinc-400">
-                {drumEvents.length} Hits · Click grid to add Kick/Snare
+                {drumEvents.length} Hits · Click Pad or grid to loop
               </span>
             </div>
 
@@ -450,14 +534,14 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
                       data-hw-title={`DRUM TIMELINE · STEP ${step32 + 1}/32`}
                       data-hw-func="Click to insert an MPC Kick/Snare drum hit at this 1/16th-note position."
                       onClick={() => {
-                        const padIdx = step32 % 8 === 4 ? 1 : 0; // Snare on backbeats, Kick otherwise
-                        soundEngine.triggerPad(padIdx, 'A', 115);
+                        const padIdx = step32 % 8 === 4 ? 1 : 0;
+                        soundEngine.triggerPad(padIdx, padBank, 115);
                         onAddQuickEvent({
                           id: `manual-drum-${Date.now()}-${Math.random()}`,
                           beatOffset: beatPos,
                           type: 'pad',
                           index: padIdx,
-                          bank: 'A',
+                          bank: padBank,
                           velocity: 115,
                           durationBeats: 0.25,
                         });
@@ -569,7 +653,7 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
               <div className="flex items-center justify-between text-[10px] font-mono-tabular text-zinc-400">
                 <span>{bassEvents.length} Notes</span>
                 <div className="flex items-center gap-1">
-                  <span>Insert:</span>
+                  <span>Root:</span>
                   {[48, 51, 53, 55].map((midi) => (
                     <button
                       key={midi}
@@ -631,7 +715,10 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
               {/* Rendered Bass Guitar Note Blocks */}
               {bassEvents.map((ev) => {
                 const leftPct = ((ev.beatOffset % 8) / 8) * 100;
-                const widthPct = Math.max(3.1, Math.min(100 - leftPct, ((ev.durationBeats || 0.5) / 8) * 100));
+                const widthPct = Math.max(
+                  3.1,
+                  Math.min(100 - leftPct, ((ev.durationBeats || 0.5) / 8) * 100)
+                );
                 return (
                   <button
                     key={ev.id}
@@ -776,7 +863,10 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
               {/* Rendered Synth Note Blocks */}
               {synthEvents.map((ev) => {
                 const leftPct = ((ev.beatOffset % 8) / 8) * 100;
-                const widthPct = Math.max(3.1, Math.min(100 - leftPct, ((ev.durationBeats || 0.5) / 8) * 100));
+                const widthPct = Math.max(
+                  3.1,
+                  Math.min(100 - leftPct, ((ev.durationBeats || 0.5) / 8) * 100)
+                );
                 return (
                   <button
                     key={ev.id}
