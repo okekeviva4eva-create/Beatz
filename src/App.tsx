@@ -12,6 +12,7 @@ import {
   TimeDivision,
 } from './audio/soundEngine';
 import { exportLoopToMidiFile } from './audio/midiExporter';
+import { exportBeatToWavFile } from './audio/wavExporter';
 import {
   HardwareHoverCallout,
   HoveredControlInfo,
@@ -39,7 +40,7 @@ import { OfflineBanner, PWAInstallButton } from './components/PWAOfflineControls
 
 type RecordedEvent = BeatRecordedEvent;
 
-const OFFLINE_SESSION_STORAGE_KEY = 'mpk_studio_offline_session_v2';
+const OFFLINE_SESSION_STORAGE_KEY = 'mpk_studio_offline_session_v5';
 
 const TIME_DIV_STEPS_PER_BEAT: Record<TimeDivision, number> = {
   '1/4': 1,
@@ -55,16 +56,24 @@ const TIME_DIV_STEPS_PER_BEAT: Record<TimeDivision, number> = {
 const SIXTEENTH_NOTE_BEATS = 0.25; // 1/16th note = 0.25 quarter-note beats
 const LOOP_LENGTH_BEATS = 8;       // 2 bars of 4/4 = 8 beats (32 sixteenth-note steps)
 
-// Default 2-bar (32-step) rhythmic groove patterns when a user clicks an MPC Pad to loop it
-const PAD_LOOP_PATTERNS_32: Record<number, number[]> = {
-  0: [0, 6, 8, 14, 16, 22, 24, 30], // Pad 1: Kick groove
-  1: [4, 12, 20, 28],               // Pad 2: Snare backbeat
-  2: [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30], // Pad 3: Steady 8th Hats
-  3: [2, 10, 18, 26],               // Pad 4: Upbeat Open Hats
-  4: [4, 11, 12, 20, 27, 28],       // Pad 5: Syncopated Clap / Perc
-  5: [3, 7, 15, 19, 23, 31],        // Pad 6: Rimshot / Cowbell accents
-  6: [0, 3, 8, 11, 16, 19, 24, 27], // Pad 7: Sub / Bass Pad drop groove
-  7: [0, 6, 12, 16, 22, 28],        // Pad 8: Rhodes / Chord Stabs
+// Musical step order for each MPC Pad (0..7) so tapping a pad 1x, 2x, 3x... places hits cleanly on the beat
+const PAD_MUSICAL_STEP_ORDER_32: Record<number, number[]> = {
+  // Pad 1 (Kick): Quarter-note beats first (1, 2, 3, 4 across Bars 1 & 2), then 8th-note grooves
+  0: [0, 4, 8, 12, 16, 20, 24, 28, 2, 6, 10, 14, 18, 22, 26, 30, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31],
+  // Pad 2 (Snare): Backbeats (Beats 2 & 4 across Bars 1 & 2) first, then downbeats & 8ths
+  1: [4, 12, 20, 28, 0, 8, 16, 24, 2, 6, 10, 14, 18, 22, 26, 30, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31],
+  // Pad 3 (Closed Hat): Steady 8th-note steps in order across Bars 1 & 2, then 16th-note rolls
+  2: [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31],
+  // Pad 4 (Open Hat): Off-beat 8th notes first (2, 6, 10, 14...)
+  3: [2, 6, 10, 14, 18, 22, 26, 30, 0, 4, 8, 12, 16, 20, 24, 28, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31],
+  // Pad 5 (Clap): Backbeats (Beats 2 & 4) first
+  4: [4, 12, 20, 28, 0, 8, 16, 24, 2, 6, 10, 14, 18, 22, 26, 30, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31],
+  // Pad 6 (Rimshot / Perc): Beats 1 & 3 first
+  5: [0, 8, 16, 24, 4, 12, 20, 28, 2, 6, 10, 14, 18, 22, 26, 30, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31],
+  // Pad 7 (808 / Bass Drop): Bar downbeats & half-notes first
+  6: [0, 16, 8, 24, 4, 12, 20, 28, 2, 6, 10, 14, 18, 22, 26, 30, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31],
+  // Pad 8 (Chord Stab): Beats 1 & 3 across Bars 1 & 2 first
+  7: [0, 8, 16, 24, 4, 12, 20, 28, 2, 6, 10, 14, 18, 22, 26, 30, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31],
 };
 
 function quantizeEventsToSixteenthGrid(events: RecordedEvent[]): RecordedEvent[] {
@@ -161,13 +170,17 @@ export default function App() {
     B: Array(8).fill(false),
   }));
 
-  // Refs for real-time audio clock access
+  // Refs for real-time audio clock access (prevents clock resets when UI state toggles)
   const heldNotesRef = useRef<number[]>([]);
   const heldPadsRef = useRef<Set<number>>(new Set());
   const arpStepIndexRef = useRef<number>(0);
   const arpDirectionRef = useRef<1 | -1>(1);
   const tapTimesRef = useRef<number[]>([]);
   const loopStartRef = useRef<number>(performance.now());
+  const clockStep32Ref = useRef<number>(0);
+  const lastTickTimeRef = useRef<number>(performance.now());
+  const lastTickStep32Ref = useRef<number>(0);
+  const justAddedEventIdsRef = useRef<Set<string>>(new Set());
   const currentLoopBeatRef = useRef<number>(0);
   const recordedEventsRef = useRef<RecordedEvent[]>([]);
   const activeRecordedNotesRef = useRef<Map<number, { id: string; startMs: number }>>(new Map());
@@ -175,22 +188,37 @@ export default function App() {
   const mutedPadsRef = useRef<Record<'A' | 'B', boolean[]>>(mutedPads);
   const mutedTracksRef = useRef(mutedTracks);
   const padVelocityConfigRef = useRef<PadVelocityConfig>(padVelocityConfig);
+  const demoPlayingRef = useRef<boolean>(demoPlaying);
+  const loopRecordingRef = useRef<boolean>(loopRecording);
+  const metronomeOnRef = useRef<boolean>(metronomeOn);
+  const padBankRef = useRef<'A' | 'B'>(padBank);
+  const fullLevelRef = useRef<boolean>(fullLevel);
+  const swingRef = useRef<SwingAmount>(swing);
+
   currentLoopBeatRef.current = currentLoopBeat;
   recordedEventsRef.current = recordedEvents;
   stepGridRef.current = stepGrid;
   mutedPadsRef.current = mutedPads;
   mutedTracksRef.current = mutedTracks;
   padVelocityConfigRef.current = padVelocityConfig;
+  demoPlayingRef.current = demoPlaying;
+  loopRecordingRef.current = loopRecording;
+  metronomeOnRef.current = metronomeOn;
+  padBankRef.current = padBank;
+  fullLevelRef.current = fullLevel;
+  swingRef.current = swing;
 
-  // Compute which pads (0..7) in current padBank are actively looping in recordedEvents
-  const loopingPads = React.useMemo(() => {
+  // Compute which pads (0..7) in current padBank are actively looping and how many hits each pad has
+  const { loopingPads, loopingPadCounts } = React.useMemo(() => {
     const active = new Set<number>();
+    const counts: Record<number, number> = {};
     recordedEvents.forEach((ev) => {
       if (ev.type === 'pad' && (ev.bank || 'A') === padBank) {
         active.add(ev.index);
+        counts[ev.index] = (counts[ev.index] || 0) + 1;
       }
     });
-    return active;
+    return { loopingPads: active, loopingPadCounts: counts };
   }, [recordedEvents, padBank]);
 
   // Restore saved offline session on initial mount
@@ -342,48 +370,84 @@ export default function App() {
     }
   }, []);
 
-  // Toggle an MPC Pad's continuous loop pattern in the live beat
-  const handleTogglePadLoop = useCallback(
+  // Clear/Stop all loop hits for a specific MPC Pad
+  const handleClearPadLoop = useCallback(
+    (padIndex: number) => {
+      const padLabel =
+        padBank === 'A' ? program.padNamesA[padIndex] : program.padNamesB[padIndex];
+
+      setRecordedEvents((prev) => {
+        const remaining = prev.filter(
+          (ev) => !(ev.type === 'pad' && ev.index === padIndex && (ev.bank || 'A') === padBank)
+        );
+        const hasAnyGridSteps =
+          stepGridRef.current.A.some((r) => r.some((v) => v > 0)) ||
+          stepGridRef.current.B.some((r) => r.some((v) => v > 0));
+        if (remaining.length === 0 && !hasAnyGridSteps) {
+          setDemoPlaying(false);
+          clockStep32Ref.current = 0;
+          setCurrentLoopBeat(0);
+          setCurrentStep16(0);
+        }
+        setLcdStatus(`STOPPED PAD ${padIndex + 1} (${padLabel.toUpperCase()})`);
+        return remaining;
+      });
+    },
+    [padBank, program]
+  );
+
+  // Add a hit of an MPC Pad into the 2-bar loop every time the user touches the pad (1x, 2x, 3x...)
+  const handleAddPadHitToLoop = useCallback(
     (padIndex: number, vel = 116) => {
       const padLabel =
         padBank === 'A' ? program.padNamesA[padIndex] : program.padNamesB[padIndex];
 
-      // Clear any background 16-step demo preset grid so ONLY the pad(s) the user clicked will play
-      setStepGrid({
-        A: createEmptyGrid(),
-        B: createEmptyGrid(),
-      });
+      const nowMs = performance.now();
 
       setRecordedEvents((prev) => {
-        const alreadyLooping = prev.some(
+        const existingPadHits = prev.filter(
           (ev) => ev.type === 'pad' && ev.index === padIndex && (ev.bank || 'A') === padBank
         );
+        const occupiedSteps = new Set(
+          existingPadHits.map((ev) => ((Math.round(ev.beatOffset * 4) % 32) + 32) % 32)
+        );
 
-        if (alreadyLooping) {
-          const remaining = prev.filter(
-            (ev) => !(ev.type === 'pad' && ev.index === padIndex && (ev.bank || 'A') === padBank)
-          );
-          if (remaining.length === 0) {
-            setDemoPlaying(false);
-          }
-          setLcdStatus(`STOPPED PAD ${padIndex + 1} LOOP (${padLabel.toUpperCase()})`);
-          return remaining;
+        // Use the pad's musical beat step order so 1st tap, 2nd tap, 3rd tap... always lock onto the beat grid!
+        const stepOrder = PAD_MUSICAL_STEP_ORDER_32[padIndex] || PAD_MUSICAL_STEP_ORDER_32[0];
+        const targetStep32 =
+          stepOrder.find((s) => !occupiedSteps.has(s)) ?? (existingPadHits.length * 4) % 32;
+
+        if (!demoPlayingRef.current && prev.length === 0) {
+          lastTickStep32Ref.current = 0;
+          lastTickTimeRef.current = nowMs;
+          clockStep32Ref.current = 0;
         }
 
-        const patternSteps = PAD_LOOP_PATTERNS_32[padIndex] || [0, 8, 16, 24];
-        const newPadEvents: RecordedEvent[] = patternSteps.map((step32) => ({
-          id: `latch-pad-${padBank}-${padIndex}-${step32}-${Date.now()}-${Math.random()}`,
-          beatOffset: step32 * 0.25,
+        const eventId = `tap-pad-${padBank}-${padIndex}-${targetStep32}-${Date.now()}-${Math.random()}`;
+        // Prevent the master clock from double-firing this exact event within the next 220ms since the user's tap just sounded live
+        justAddedEventIdsRef.current.add(eventId);
+        setTimeout(() => {
+          justAddedEventIdsRef.current.delete(eventId);
+        }, 220);
+
+        const newHit: RecordedEvent = {
+          id: eventId,
+          beatOffset: targetStep32 * 0.25,
           type: 'pad',
           index: padIndex,
           bank: padBank,
           velocity: vel,
           durationBeats: 0.25,
-        }));
+        };
 
+        const newCount = existingPadHits.length + 1;
         setDemoPlaying(true);
-        setLcdStatus(`PAD ${padIndex + 1} (${padLabel.toUpperCase()}) LOOPING IN BEAT`);
-        return [...prev, ...newPadEvents];
+        setLcdStatus(
+          `PAD ${padIndex + 1} (${padLabel.toUpperCase()}) · ${newCount} HIT${
+            newCount === 1 ? '' : 'S'
+          } IN BEAT`
+        );
+        return [...prev, newHit];
       });
 
       setMutedTracks((prev) => ({ ...prev, drums: false }));
@@ -391,83 +455,71 @@ export default function App() {
     [padBank, program]
   );
 
-  // Layer / Join an Electric Bass Guitar groove into the currently playing beat
+  // Add a Bass Guitar note hit into the playing beat every time the user presses a key
   const handleJoinBassGroove = useCallback(
-    (bassVoice: KeyboardVoiceMode, rootMidi = 48) => {
+    (bassVoice: KeyboardVoiceMode, rootMidi = 48, vel = 115) => {
       const voiceToUse: KeyboardVoiceMode =
         bassVoice === 'synth' ? 'finger-bass' : bassVoice;
       setKeyboardVoice(voiceToUse);
       soundEngine.setKeyboardVoiceMode(voiceToUse);
 
-      // Audition the root bass note immediately so the user hears the bass join in
-      soundEngine.noteOn(rootMidi, 118, voiceToUse);
-      setTimeout(() => soundEngine.noteOff(rootMidi), 220);
+      const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+      const noteName = `${noteNames[((rootMidi % 12) + 12) % 12]}${Math.floor(rootMidi / 12) - 2}`;
+      const voiceLabel =
+        KEYBOARD_VOICE_OPTIONS.find((v) => v.id === voiceToUse)?.label || 'Bass Guitar';
 
-      // Build a 2-bar (32 sixteenth-note) Electric Bass Guitar groove around rootMidi
-      const r = Math.max(36, Math.min(60, rootMidi));
-      const pattern: [number, number, number, number][] =
-        voiceToUse === 'slap-bass'
-          ? [
-              [0, r, 0.35, 124],
-              [2, r + 12, 0.25, 126],
-              [3, r, 0.25, 112],
-              [6, r + 3, 0.5, 120],
-              [8, r + 5, 0.35, 124],
-              [10, r + 17, 0.25, 126],
-              [12, r + 7, 0.5, 120],
-              [14, r + 19, 0.25, 124],
-              [16, r, 0.35, 124],
-              [18, r + 12, 0.25, 126],
-              [20, r + 3, 0.5, 118],
-              [22, r + 5, 0.35, 122],
-              [24, r + 7, 0.35, 125],
-              [26, r + 19, 0.25, 126],
-              [28, r + 5, 0.5, 120],
-              [30, r + 3, 0.35, 118],
-            ]
-          : voiceToUse === 'picked-bass'
-          ? Array.from({ length: 16 }, (_, i) => {
-              const step32 = i * 2;
-              const note =
-                step32 < 8 ? r : step32 < 16 ? r + 7 : step32 < 24 ? r + 5 : r + 3;
-              return [step32, note, 0.35, step32 % 4 === 0 ? 122 : 108];
-            })
-          : [
-              // Fingered P-Bass / Fretless Bass groove
-              [0, r, 0.75, 122],
-              [3, r + 3, 0.5, 114],
-              [6, r + 5, 0.5, 118],
-              [8, r + 7, 0.75, 124],
-              [12, r + 3, 0.75, 116],
-              [16, r, 0.75, 122],
-              [19, r + 3, 0.5, 114],
-              [22, r + 7, 0.5, 120],
-              [24, r + 5, 0.75, 122],
-              [28, r + 2, 0.75, 116],
-            ];
+      const nowMs = performance.now();
+      const eventId = `tap-bass-${voiceToUse}-${rootMidi}-${Date.now()}-${Math.random()}`;
+      activeRecordedNotesRef.current.set(rootMidi, { id: eventId, startMs: nowMs });
 
-      const bassEvents: RecordedEvent[] = pattern.map(([step32, midi, dur, vel]) => ({
-        id: `latch-bass-${voiceToUse}-${step32}-${Date.now()}-${Math.random()}`,
-        beatOffset: step32 * 0.25,
-        type: 'note',
-        index: midi,
-        velocity: vel,
-        durationBeats: dur,
-        voiceMode: voiceToUse,
-      }));
+      justAddedEventIdsRef.current.add(eventId);
+      setTimeout(() => {
+        justAddedEventIdsRef.current.delete(eventId);
+      }, 220);
 
       setRecordedEvents((prev) => {
-        const withoutOldBass = prev.filter(
-          (ev) => !(ev.type === 'note' && ev.voiceMode && ev.voiceMode !== 'synth')
+        const existingBassHits = prev.filter(
+          (ev) => ev.type === 'note' && ev.voiceMode && ev.voiceMode !== 'synth'
         );
-        return [...withoutOldBass, ...bassEvents];
+        const occupiedBassSteps = new Set(
+          existingBassHits.map((ev) => ((Math.round(ev.beatOffset * 4) % 32) + 32) % 32)
+        );
+
+        const bassStepOrder = [
+          0, 4, 8, 12, 16, 20, 24, 28,
+          2, 6, 10, 14, 18, 22, 26, 30,
+          1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31,
+        ];
+        const targetStep32 =
+          bassStepOrder.find((s) => !occupiedBassSteps.has(s)) ?? (existingBassHits.length * 4) % 32;
+
+        if (!demoPlayingRef.current && prev.length === 0) {
+          lastTickStep32Ref.current = 0;
+          lastTickTimeRef.current = nowMs;
+          clockStep32Ref.current = 0;
+        }
+
+        const newBassHit: RecordedEvent = {
+          id: eventId,
+          beatOffset: targetStep32 * 0.25,
+          type: 'note',
+          index: rootMidi,
+          velocity: vel,
+          durationBeats: 0.5,
+          voiceMode: voiceToUse,
+        };
+
+        const newCount = existingBassHits.length + 1;
+        setDemoPlaying(true);
+        setLcdStatus(
+          `${voiceLabel.toUpperCase()} (${noteName}) · ${newCount} NOTE${
+            newCount === 1 ? '' : 'S'
+          } IN BEAT`
+        );
+        return [...prev, newBassHit];
       });
 
       setMutedTracks((prev) => ({ ...prev, bass: false }));
-      setDemoPlaying(true);
-      const voiceLabel =
-        KEYBOARD_VOICE_OPTIONS.find((v) => v.id === voiceToUse)?.label || 'Bass Guitar';
-      setLcdStatus(`${voiceLabel.toUpperCase()} JOINED THE BEAT`);
     },
     []
   );
@@ -507,14 +559,22 @@ export default function App() {
       });
 
       if (loopRecording) {
-        const rawBeat = currentLoopBeatRef.current;
+        const nowMs = performance.now();
+        const subBeat = Math.min(0.25, Math.max(0, (nowMs - lastTickTimeRef.current) / (60000 / bpm)));
+        const rawBeat = ((lastTickStep32Ref.current * 0.25 + subBeat) % 8 + 8) % 8;
         const beatOffset = autoQuantize
           ? ((Math.round(rawBeat / 0.25) * 0.25) % 8 + 8) % 8
           : rawBeat;
+        const eventId = `rec-pad-${Date.now()}-${Math.random()}`;
+        justAddedEventIdsRef.current.add(eventId);
+        setTimeout(() => {
+          justAddedEventIdsRef.current.delete(eventId);
+        }, 220);
+
         setRecordedEvents((prev) => [
           ...prev,
           {
-            id: `${Date.now()}-${Math.random()}`,
+            id: eventId,
             beatOffset,
             type: 'pad',
             index: padIndex,
@@ -528,8 +588,8 @@ export default function App() {
           `REC PAD ${padIndex + 1} [${padBank}] · ${padLabel.toUpperCase()} · VEL ${vel}`
         );
       } else if (liveLatchMode) {
-        // Live Pad Latch mode: clicking a pad keeps it playing in the beat loop!
-        handleTogglePadLoop(padIndex, vel);
+        // Live Pad Loop mode: every touch on the pad adds another locked-in hit of this pad into the beat!
+        handleAddPadHitToLoop(padIndex, vel);
       } else {
         setLcdStatus(
           `PAD ${padIndex + 1} [${padBank}] · ${padLabel.toUpperCase()} · VEL ${vel} (${
@@ -547,10 +607,11 @@ export default function App() {
       program,
       noteRepeat,
       loopRecording,
+      bpm,
       autoQuantize,
       demoPlaying,
       liveLatchMode,
-      handleTogglePadLoop,
+      handleAddPadHitToLoop,
     ]
   );
 
@@ -591,11 +652,17 @@ export default function App() {
 
       if (loopRecording && !arpOn) {
         const nowMs = performance.now();
-        const rawBeat = currentLoopBeatRef.current;
+        const subBeat = Math.min(0.25, Math.max(0, (nowMs - lastTickTimeRef.current) / (60000 / bpm)));
+        const rawBeat = ((lastTickStep32Ref.current * 0.25 + subBeat) % 8 + 8) % 8;
         const beatOffset = autoQuantize
           ? ((Math.round(rawBeat / 0.25) * 0.25) % 8 + 8) % 8
           : rawBeat;
-        const eventId = `${Date.now()}-${Math.random()}`;
+        const eventId = `rec-note-${Date.now()}-${Math.random()}`;
+        justAddedEventIdsRef.current.add(eventId);
+        setTimeout(() => {
+          justAddedEventIdsRef.current.delete(eventId);
+        }, 220);
+
         activeRecordedNotesRef.current.set(midiNote, { id: eventId, startMs: nowMs });
         setRecordedEvents((prev) => [
           ...prev,
@@ -612,7 +679,7 @@ export default function App() {
         if (!demoPlaying) setDemoPlaying(true);
         setLcdStatus(`REC NOTE ${name} (${keyboardVoice.toUpperCase()}) · VEL ${vel}`);
       } else if (liveLatchMode && keyboardVoice !== 'synth' && !arpOn) {
-        // In Live Latch Mode, pressing any Bass Guitar key joins/shifts the Bass groove in the playing beat!
+        // In Live Latch Mode, pressing any Bass Guitar key adds a locked-in Bass note to the beat!
         handleJoinBassGroove(keyboardVoice, midiNote);
       } else {
         setLcdStatus(`NOTE ${name} (${midiNote}) · VEL ${vel}`);
@@ -625,6 +692,7 @@ export default function App() {
       arpOn,
       arpLatch,
       loopRecording,
+      bpm,
       autoQuantize,
       demoPlaying,
       liveLatchMode,
@@ -662,10 +730,30 @@ export default function App() {
     [arpLatch, arpOn, bpm]
   );
 
+  const handleExportWav = useCallback(async () => {
+    setLcdStatus('RENDERING BEAT TO STEREO .WAV AUDIO...');
+    const ok = await exportBeatToWavFile({
+      recordedEvents,
+      stepGrid,
+      mutedTracks,
+      mutedPads,
+      bpm,
+      swing,
+      program,
+      knobs,
+      loopCycles: 2,
+    });
+    if (!ok) {
+      setLcdStatus('ADD DRUMS, BASS OR SYNTH NOTES BEFORE EXPORTING .WAV');
+      return;
+    }
+    setLcdStatus(`WAV AUDIO EXPORTED (${bpm} BPM · STEREO 44.1KHZ)`);
+  }, [recordedEvents, stepGrid, mutedTracks, mutedPads, bpm, swing, program, knobs]);
+
   const handleExportMidi = useCallback(() => {
     const combinedEvents: RecordedEvent[] = [...recordedEvents];
 
-    // Also include active steps from the 16-Step Drum Grid Sequencer
+    // Also include active steps from the 16-Step Drum Grid Sequencer across both bars (0..31)
     (['A', 'B'] as const).forEach((bank) => {
       const grid = stepGrid[bank];
       const mutes = mutedPads[bank];
@@ -675,8 +763,17 @@ export default function App() {
           const val = grid[padIdx][stepIdx];
           if (val > 0) {
             combinedEvents.push({
-              id: `seq-${bank}-${padIdx}-${stepIdx}`,
+              id: `seq-bar1-${bank}-${padIdx}-${stepIdx}`,
               beatOffset: stepIdx * 0.25,
+              type: 'pad',
+              index: padIdx,
+              bank,
+              velocity: val === 2 ? 127 : 105,
+              durationBeats: 0.25,
+            });
+            combinedEvents.push({
+              id: `seq-bar2-${bank}-${padIdx}-${stepIdx}`,
+              beatOffset: (stepIdx + 16) * 0.25,
               type: 'pad',
               index: padIdx,
               bank,
@@ -718,36 +815,129 @@ export default function App() {
     }
   };
 
-  // Master Clock for Arpeggiator, Note Repeat, Demo Groove, and Recorded Loop Playback
+  // Master 16th-Note Studio Clock for Beat Looper & 16-Step Drum Grid
   useEffect(() => {
-    const stepsPerBeat = TIME_DIV_STEPS_PER_BEAT[timeDivision];
-    const baseStepMs = 60000 / bpm / stepsPerBeat;
-    let stepCounter = 0;
+    const baseSixteenthMs = 60000 / bpm / 4;
     let timeoutId: number;
 
-    const tick = () => {
-      const isOddStep = stepCounter % 2 === 1;
-      const swingFactor = isOddStep ? 1 + (swing - 50) / 50 : 1 - (swing - 50) / 50;
-      const currentStepDurationMs = Math.max(25, baseStepMs * swingFactor);
+    const tickBeat = () => {
+      // When stopped, keep the playhead parked cleanly at Bar 1, Beat 1 (Step 0)
+      if (!demoPlayingRef.current && !loopRecordingRef.current) {
+        clockStep32Ref.current = 0;
+        lastTickStep32Ref.current = 0;
+        lastTickTimeRef.current = performance.now();
+        timeoutId = window.setTimeout(tickBeat, 60);
+        return;
+      }
 
-      const stepSizeBeats = 1 / stepsPerBeat;
-      const loopBeatPos =
-        ((stepCounter * stepSizeBeats) % LOOP_LENGTH_BEATS + LOOP_LENGTH_BEATS) % LOOP_LENGTH_BEATS;
+      const step32 = ((clockStep32Ref.current % 32) + 32) % 32;
+      const step16 = step32 % 16;
+      lastTickTimeRef.current = performance.now();
+      lastTickStep32Ref.current = step32;
+
+      const isOddStep = step32 % 2 === 1;
+      const activeSwing = swingRef.current;
+      const swingFactor = isOddStep ? 1 + (activeSwing - 50) / 50 : 1 - (activeSwing - 50) / 50;
+      const currentStepDurationMs = Math.max(30, baseSixteenthMs * swingFactor);
+
+      const loopBeatPos = step32 * 0.25;
       setCurrentLoopBeat(loopBeatPos);
+      setCurrentStep16(step16);
 
-      // Quarter-note beat LED flash & Studio Metronome Click
-      const stepsPerQuarter = Math.max(1, Math.round(stepsPerBeat));
-      if (stepCounter % stepsPerQuarter === 0) {
+      // Quarter-note beat LED flash & Studio Metronome Click (every 4 sixteenth-notes)
+      if (step32 % 4 === 0) {
         setBeatPulse(true);
         setTimeout(() => setBeatPulse(false), 90);
-        if (metronomeOn && (demoPlaying || loopRecording)) {
-          const quarterIndex = Math.floor(stepCounter / stepsPerQuarter) % 4;
+        if (metronomeOnRef.current) {
+          const quarterIndex = Math.floor(step32 / 4) % 4;
           soundEngine.playMetronomeClick(quarterIndex === 0);
         }
       }
 
-      const step16 = stepCounter % 16;
-      setCurrentStep16(step16);
+      // 1. Handle 16-Step Drum Grid Sequencer playback
+      if (!mutedTracksRef.current.drums) {
+        (['A', 'B'] as const).forEach((bank) => {
+          const bankGrid = stepGridRef.current[bank];
+          const bankMutes = mutedPadsRef.current[bank];
+          for (let padIdx = 0; padIdx < 8; padIdx++) {
+            if (bankMutes[padIdx]) continue;
+            const stepVal = bankGrid[padIdx][step16];
+            if (stepVal > 0) {
+              const vel = fullLevelRef.current ? 127 : stepVal === 2 ? 126 : 104;
+              soundEngine.triggerPad(padIdx, bank, vel);
+              if (bank === padBankRef.current) {
+                setActivePads((p) => new Set(p).add(padIdx));
+                setTimeout(() => {
+                  setActivePads((p) => {
+                    const n = new Set(p);
+                    n.delete(padIdx);
+                    return n;
+                  });
+                }, 110);
+              }
+            }
+          }
+        });
+      }
+
+      // 2. Play back recorded loop events matching the exact 16th-note step (0..31)
+      if (recordedEventsRef.current.length > 0) {
+        recordedEventsRef.current.forEach((ev) => {
+          if (justAddedEventIdsRef.current.has(ev.id)) return;
+          const evStep32 = ((Math.round(ev.beatOffset * 4) % 32) + 32) % 32;
+          if (evStep32 === step32) {
+            if (ev.type === 'pad') {
+              if (mutedTracksRef.current.drums) return;
+              soundEngine.triggerPad(ev.index, ev.bank || 'A', ev.velocity);
+              setActivePads((p) => new Set(p).add(ev.index));
+              setTimeout(() => {
+                setActivePads((p) => {
+                  const n = new Set(p);
+                  n.delete(ev.index);
+                  return n;
+                });
+              }, 110);
+            } else {
+              const isBassEvent = ev.voiceMode && ev.voiceMode !== 'synth';
+              if (isBassEvent && mutedTracksRef.current.bass) return;
+              if (!isBassEvent && mutedTracksRef.current.synth) return;
+
+              const durMs = Math.max(90, (ev.durationBeats ?? 0.5) * (60000 / bpm) * 0.85);
+              soundEngine.noteOn(ev.index, ev.velocity, ev.voiceMode);
+              setActiveNotes((p) => new Set(p).add(ev.index));
+              setTimeout(() => {
+                soundEngine.noteOff(ev.index);
+                setActiveNotes((p) => {
+                  const n = new Set(p);
+                  n.delete(ev.index);
+                  return n;
+                });
+              }, durMs);
+            }
+          }
+        });
+      }
+
+      clockStep32Ref.current = (step32 + 1) % 32;
+      timeoutId = window.setTimeout(tickBeat, currentStepDurationMs);
+    };
+
+    timeoutId = window.setTimeout(tickBeat, baseSixteenthMs);
+    return () => clearTimeout(timeoutId);
+  }, [bpm]);
+
+  // Dedicated Arpeggiator & Note Repeat Performance Clock (follows selected Time Division 1/4..1/32T)
+  useEffect(() => {
+    if (!arpOn && !noteRepeat) return;
+    const stepsPerBeat = TIME_DIV_STEPS_PER_BEAT[timeDivision];
+    const baseStepMs = 60000 / bpm / stepsPerBeat;
+    let perfStep = 0;
+    let timeoutId: number;
+
+    const tickPerf = () => {
+      const isOddStep = perfStep % 2 === 1;
+      const swingFactor = isOddStep ? 1 + (swing - 50) / 50 : 1 - (swing - 50) / 50;
+      const currentStepDurationMs = Math.max(25, baseStepMs * swingFactor);
 
       // 1. Handle Note Repeat if active and any pads are held
       if (noteRepeat && heldPadsRef.current.size > 0) {
@@ -763,7 +953,6 @@ export default function App() {
         const sortedBase =
           arpMode === 'ORDER' ? [...poolBase] : [...poolBase].sort((a, b) => a - b);
 
-        // Expand across selected ARP OCT 1..4
         const expandedPool: number[] = [];
         for (let oct = 0; oct < arpOctaves; oct++) {
           sortedBase.forEach((n) => expandedPool.push(n + oct * 12));
@@ -814,76 +1003,11 @@ export default function App() {
         }
       }
 
-      // 3. Handle 16-Step Drum Grid Sequencer & Demo Groove playback
-      if (demoPlaying && !mutedTracksRef.current.drums) {
-        (['A', 'B'] as const).forEach((bank) => {
-          const bankGrid = stepGridRef.current[bank];
-          const bankMutes = mutedPadsRef.current[bank];
-          for (let padIdx = 0; padIdx < 8; padIdx++) {
-            if (bankMutes[padIdx]) continue;
-            const stepVal = bankGrid[padIdx][step16];
-            if (stepVal > 0) {
-              const vel = fullLevel ? 127 : stepVal === 2 ? 126 : 104;
-              soundEngine.triggerPad(padIdx, bank, vel);
-              if (bank === padBank) {
-                setActivePads((p) => new Set(p).add(padIdx));
-                setTimeout(() => {
-                  setActivePads((p) => {
-                    const n = new Set(p);
-                    n.delete(padIdx);
-                    return n;
-                  });
-                }, 110);
-              }
-            }
-          }
-        });
-      }
-
-      // 4. Play back recorded loop events matching the current beat window
-      if (recordedEventsRef.current.length > 0 && (demoPlaying || loopRecording)) {
-        recordedEventsRef.current.forEach((ev) => {
-          const delta =
-            ((ev.beatOffset - loopBeatPos) % LOOP_LENGTH_BEATS + LOOP_LENGTH_BEATS) %
-            LOOP_LENGTH_BEATS;
-          if (delta < stepSizeBeats - 0.0001 || Math.abs(delta) < 0.001) {
-            if (ev.type === 'pad') {
-              if (mutedTracksRef.current.drums) return;
-              soundEngine.triggerPad(ev.index, ev.bank || 'A', ev.velocity);
-              setActivePads((p) => new Set(p).add(ev.index));
-              setTimeout(() => {
-                setActivePads((p) => {
-                  const n = new Set(p);
-                  n.delete(ev.index);
-                  return n;
-                });
-              }, 110);
-            } else {
-              const isBassEvent = ev.voiceMode && ev.voiceMode !== 'synth';
-              if (isBassEvent && mutedTracksRef.current.bass) return;
-              if (!isBassEvent && mutedTracksRef.current.synth) return;
-
-              const durMs = Math.max(90, (ev.durationBeats ?? 0.5) * (60000 / bpm) * 0.85);
-              soundEngine.noteOn(ev.index, ev.velocity, ev.voiceMode);
-              setActiveNotes((p) => new Set(p).add(ev.index));
-              setTimeout(() => {
-                soundEngine.noteOff(ev.index);
-                setActiveNotes((p) => {
-                  const n = new Set(p);
-                  n.delete(ev.index);
-                  return n;
-                });
-              }, durMs);
-            }
-          }
-        });
-      }
-
-      stepCounter++;
-      timeoutId = window.setTimeout(tick, currentStepDurationMs);
+      perfStep++;
+      timeoutId = window.setTimeout(tickPerf, currentStepDurationMs);
     };
 
-    timeoutId = window.setTimeout(tick, baseStepMs);
+    timeoutId = window.setTimeout(tickPerf, baseStepMs);
     return () => clearTimeout(timeoutId);
   }, [
     bpm,
@@ -897,9 +1021,6 @@ export default function App() {
     latchedNotes,
     arpMode,
     arpOctaves,
-    demoPlaying,
-    loopRecording,
-    metronomeOn,
   ]);
 
   // Computer Keyboard Support (25 keys + 8 pads + Octave)
@@ -1048,9 +1169,25 @@ export default function App() {
       <div key={padIndex} className="flex flex-col group">
         {/* Hardware Silkscreen Header above Pad */}
         <div className="flex items-center justify-between px-0.5 mb-1">
-          <span className="text-[9px] font-extrabold tracking-tight text-zinc-200 group-hover:text-white leading-none transition-colors">
-            {label}
-          </span>
+          <div className="flex items-center gap-1">
+            <span className="text-[9px] font-extrabold tracking-tight text-zinc-200 group-hover:text-white leading-none transition-colors">
+              {label}
+            </span>
+            {loopingPads.has(padIndex) && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleClearPadLoop(padIndex);
+                }}
+                data-hw-title={`STOP ${label} LOOP`}
+                data-hw-func={`Clears all ${loopingPadCounts[padIndex] || 1} loop hit(s) of ${label} (${sampleName}).`}
+                className="text-[7.5px] font-mono-tabular font-extrabold px-1 py-0.2 rounded bg-red-600 hover:bg-red-500 text-white leading-none cursor-pointer shadow-[0_0_6px_rgba(239,68,68,0.6)]"
+              >
+                {loopingPadCounts[padIndex] || 1}× ✕
+              </button>
+            )}
+          </div>
           {progLabel && (
             <button
               type="button"
@@ -1096,7 +1233,7 @@ export default function App() {
             </span>
             {loopingPads.has(padIndex) ? (
               <span className="text-[7.5px] font-mono-tabular font-extrabold px-1 py-0.2 rounded bg-red-600 text-white shadow-[0_0_6px_#ef4444]">
-                LOOP
+                LOOP {loopingPadCounts[padIndex] || 1}×
               </span>
             ) : (
               showKeyShortcuts &&
@@ -1253,12 +1390,17 @@ export default function App() {
                     onClick={() => {
                       setKeyboardVoice(opt.id);
                       soundEngine.setKeyboardVoiceMode(opt.id);
-                      if (opt.id !== 'synth' && liveLatchMode) {
-                        // Automatically join this Bass Guitar into the playing beat!
-                        handleJoinBassGroove(opt.id, 48);
-                      } else {
-                        setLcdStatus(`KEY VOICE: ${opt.label.toUpperCase()}`);
+                      // If a bass loop is already playing and the user switches between Bass Guitar types, update the bass tone without injecting random notes
+                      if (opt.id !== 'synth') {
+                        setRecordedEvents((prev) =>
+                          prev.map((ev) =>
+                            ev.type === 'note' && ev.voiceMode && ev.voiceMode !== 'synth'
+                              ? { ...ev, voiceMode: opt.id }
+                              : ev
+                          )
+                        );
                       }
+                      setLcdStatus(`KEY VOICE: ${opt.label.toUpperCase()}`);
                     }}
                     className={`px-2 py-1 rounded text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
                       isSelected
@@ -1848,8 +1990,15 @@ export default function App() {
             });
           }}
           onTestStrike={(rawInputNorm) => {
-            handlePadDown(0, rawInputNorm);
-            setTimeout(() => handlePadUp(0), 120);
+            const vel = computePadVelocity(rawInputNorm, padVelocityConfig, fullLevel);
+            soundEngine.triggerPad(0, padBank, vel);
+            setLastPadHit({
+              padIndex: 0,
+              padName: padBank === 'A' ? program.padNamesA[0] : program.padNamesB[0],
+              rawInputNorm,
+              outputVelocity: vel,
+              timestamp: Date.now(),
+            });
           }}
         />
 
@@ -1871,6 +2020,11 @@ export default function App() {
           onTogglePlay={() => {
             setDemoPlaying((prev) => {
               const next = !prev;
+              if (!next) {
+                clockStep32Ref.current = 0;
+                setCurrentLoopBeat(0);
+                setCurrentStep16(0);
+              }
               setLcdStatus(next ? 'BEAT PLAYBACK: RUNNING' : 'BEAT PLAYBACK: STOPPED');
               return next;
             });
@@ -1880,7 +2034,12 @@ export default function App() {
               const next = !prev;
               if (next) {
                 loopStartRef.current = performance.now();
-                if (!demoPlaying) setDemoPlaying(true);
+                if (!demoPlaying) {
+                  clockStep32Ref.current = 0;
+                  setCurrentLoopBeat(0);
+                  setCurrentStep16(0);
+                  setDemoPlaying(true);
+                }
                 setLcdStatus('OVERDUB RECORDING ARMED · PLAY PADS, BASS OR KEYS');
               } else {
                 if (autoQuantize) {
@@ -1898,13 +2057,13 @@ export default function App() {
               const next = !prev;
               setLcdStatus(
                 next
-                  ? 'LIVE PAD & BASS LATCH: ON (CLICK PAD OR BASS TO LOOP)'
-                  : 'LIVE PAD & BASS LATCH: OFF (ONE-SHOT MODE)'
+                  ? 'LIVE PAD & BASS LATCH: ON (TAP PAD OR BASS TO ADD HIT)'
+                  : 'LIVE PAD & BASS LATCH: OFF (FREE ONE-SHOT MODE)'
               );
               return next;
             });
           }}
-          onTogglePadLoop={(padIdx) => handleTogglePadLoop(padIdx, 118)}
+          onTogglePadLoop={(padIdx) => handleClearPadLoop(padIdx)}
           onJoinBassGroove={(bassVoice, rootMidi) => handleJoinBassGroove(bassVoice, rootMidi ?? 48)}
           onToggleQuantize={() => {
             setAutoQuantize((prev) => {
@@ -1936,7 +2095,10 @@ export default function App() {
               setStepGrid({ A: createEmptyGrid(), B: createEmptyGrid() });
               setLoopRecording(false);
               setDemoPlaying(false);
-              setLcdStatus('ALL RECORDED BEAT TRACKS CLEARED');
+              clockStep32Ref.current = 0;
+              setCurrentLoopBeat(0);
+              setCurrentStep16(0);
+              setLcdStatus('NEW BLANK BEAT READY · TAP PADS OR STEPS TO BUILD FROM SCRATCH');
               return;
             }
             if (track === 'drums') {
@@ -1953,6 +2115,10 @@ export default function App() {
             setLcdStatus(`CLEARED ${track.toUpperCase()} TRACK`);
           }}
           onAddQuickEvent={(ev) => {
+            justAddedEventIdsRef.current.add(ev.id);
+            setTimeout(() => {
+              justAddedEventIdsRef.current.delete(ev.id);
+            }, 220);
             setRecordedEvents((prev) => [...prev, ev]);
             if (!demoPlaying) setDemoPlaying(true);
           }}
@@ -1966,11 +2132,16 @@ export default function App() {
           onSelectKeyboardVoice={(voice) => {
             setKeyboardVoice(voice);
             soundEngine.setKeyboardVoiceMode(voice);
-            if (voice !== 'synth' && liveLatchMode) {
-              handleJoinBassGroove(voice, 48);
-            } else {
-              setLcdStatus(`KEYBOARD VOICE: ${voice.toUpperCase()}`);
+            if (voice !== 'synth') {
+              setRecordedEvents((prev) =>
+                prev.map((ev) =>
+                  ev.type === 'note' && ev.voiceMode && ev.voiceMode !== 'synth'
+                    ? { ...ev, voiceMode: voice }
+                    : ev
+                )
+              );
             }
+            setLcdStatus(`KEYBOARD VOICE: ${voice.toUpperCase()}`);
           }}
           onLoadStarterBeat={(presetId) => {
             const events: RecordedEvent[] = [];
@@ -2112,11 +2283,15 @@ export default function App() {
               hook.forEach(([s, n]) => pushNote(s, n, 0.75, 'synth', 112));
             }
 
+            clockStep32Ref.current = 0;
+            setCurrentLoopBeat(0);
+            setCurrentStep16(0);
             setRecordedEvents(events);
             setMutedTracks({ drums: false, bass: false, synth: false });
             setDemoPlaying(true);
             setLcdStatus(`LOADED MULTI-TRACK BEAT: ${presetId.toUpperCase()}`);
           }}
+          onExportWav={handleExportWav}
           onExportMidi={handleExportMidi}
           onStatusUpdate={setLcdStatus}
         />
@@ -2133,6 +2308,11 @@ export default function App() {
           onTogglePlay={() => {
             setDemoPlaying((prev) => {
               const next = !prev;
+              if (!next) {
+                clockStep32Ref.current = 0;
+                setCurrentLoopBeat(0);
+                setCurrentStep16(0);
+              }
               setLcdStatus(next ? 'STEP SEQUENCER: PLAYING' : 'STEP SEQUENCER: STOPPED');
               return next;
             });
@@ -2167,6 +2347,7 @@ export default function App() {
               A: createPresetGridForProgram(progId),
             }));
             setPadBank('A');
+            setDemoPlaying(true);
             setLcdStatus(`LOADED PROG ${progId} 16-STEP PATTERN`);
           }}
           onRandomizeBank={(bank) => {
@@ -2182,6 +2363,7 @@ export default function App() {
               );
               return { ...prev, [bank]: randGrid };
             });
+            setDemoPlaying(true);
             setLcdStatus(`RANDOMIZED 16-STEP GROOVE [BANK ${bank}]`);
           }}
           onClearBank={(bank) => {
@@ -2189,8 +2371,15 @@ export default function App() {
             setLcdStatus(`CLEARED 16-STEP GRID [BANK ${bank}]`);
           }}
           onAuditionPad={(padIdx) => {
-            handlePadDown(padIdx, 118);
-            setTimeout(() => handlePadUp(padIdx), 120);
+            soundEngine.triggerPad(padIdx, padBank, 118);
+            setActivePads((prev) => new Set(prev).add(padIdx));
+            setTimeout(() => {
+              setActivePads((prev) => {
+                const next = new Set(prev);
+                next.delete(padIdx);
+                return next;
+              });
+            }, 120);
           }}
           onBankSwitch={(bank) => {
             setPadBank(bank);

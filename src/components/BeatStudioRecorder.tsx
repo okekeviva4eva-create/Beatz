@@ -72,6 +72,7 @@ interface BeatStudioRecorderProps {
   onAddQuickEvent: (ev: BeatRecordedEvent) => void;
   onUndoLastEvent: () => void;
   onLoadStarterBeat: (presetId: 'boombap' | 'trap' | 'funk-slap' | 'synthwave') => void;
+  onExportWav: () => void;
   onExportMidi: () => void;
   onStatusUpdate: (msg: string) => void;
 }
@@ -113,11 +114,13 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
   onAddQuickEvent,
   onUndoLastEvent,
   onLoadStarterBeat,
+  onExportWav,
   onExportMidi,
   onStatusUpdate,
 }) => {
   const [isAudioRecording, setIsAudioRecording] = useState(false);
   const [audioTakes, setAudioTakes] = useState<RecordedAudioTake[]>([]);
+  const [quickDrumPad, setQuickDrumPad] = useState<number>(0); // Default PAD 1 (Kick)
   const [quickBassNote, setQuickBassNote] = useState<number>(48); // C3 (sounds as C2 in Bass mode)
   const [quickSynthNote, setQuickSynthNote] = useState<number>(60); // C4
 
@@ -182,7 +185,7 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
               </span>
             </div>
             <p className="text-xs text-zinc-400">
-              Click any MPC Pad to start it looping continuously, then click any Bass Guitar or key so it immediately joins the play.
+              Tap MPC Pads 1×, 2×, 3×... or click timeline steps to build your beat from scratch, then click <strong className="text-emerald-300">Export Beat (.WAV)</strong> to download audio.
             </p>
           </div>
         </div>
@@ -194,8 +197,8 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
             type="button"
             onClick={onToggleLiveLatchMode}
             data-hw-title="LIVE PAD & BASS AUTO-LOOP LATCH"
-            data-hw-func="When ON, clicking any MPC Drum Pad keeps that pad sound playing in a continuous rhythm loop, and selecting or playing a Bass Guitar immediately joins the playing beat."
-            data-hw-state={liveLatchMode ? 'AUTO-LOOP LATCH: ON' : 'ONE-SHOT MODE'}
+            data-hw-func="When ON, each tap on an MPC Pad adds another locked-in hit (1×, 2×, 3×...) into your beat loop. Turn OFF for free one-shot playing without adding to the loop."
+            data-hw-state={liveLatchMode ? 'AUTO-LOOP LATCH: ON' : 'FREE ONE-SHOT MODE'}
             className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap border ${
               liveLatchMode
                 ? 'bg-emerald-600/25 border-emerald-400 text-emerald-200 shadow-[0_0_12px_rgba(16,185,129,0.3)]'
@@ -203,7 +206,7 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
             }`}
           >
             <Repeat className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Click Pad/Bass to Loop: {liveLatchMode ? 'ON' : 'OFF'}</span>
+            <span>Tap Pad/Bass to Add Hit: {liveLatchMode ? 'ON' : 'OFF'}</span>
           </button>
 
           {/* Play / Stop Beat Loop */}
@@ -237,7 +240,7 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
             type="button"
             onClick={onToggleRecord}
             data-hw-title={loopRecording ? 'STOP OVERDUB RECORDING' : 'ARM BEAT OVERDUB RECORDING'}
-            data-hw-func="Records every MPC drum pad, Bass Guitar note, and Synth chord you play onto the 2-bar multi-track timeline."
+            data-hw-func="Records every MPC drum pad, Bass Guitar note, and Synth chord you play in real time onto the 2-bar multi-track timeline."
             data-hw-state={loopRecording ? 'OVERDUBBING LIVE' : 'READY TO RECORD'}
             className={`px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
               loopRecording
@@ -283,21 +286,33 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
             <span>1/16 Quantize: {autoQuantize ? 'ON' : 'OFF'}</span>
           </button>
 
+          {/* Instant Export Beat (.WAV Audio) Button */}
+          <button
+            type="button"
+            onClick={onExportWav}
+            data-hw-title="EXPORT BEAT AS .WAV AUDIO"
+            data-hw-func="Renders your produced beat (Drums, Bass Guitar, Synth, and 16-Step Grid) into a high-definition 16-bit 44.1kHz Stereo .WAV audio file and downloads it immediately."
+            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white flex items-center gap-1.5 shadow-[0_0_12px_rgba(16,185,129,0.4)] transition-all cursor-pointer whitespace-nowrap"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Export Beat (.WAV)</span>
+          </button>
+
           {/* Live Master Audio Capture Button */}
           <button
             type="button"
             onClick={handleToggleMasterAudioRecord}
             data-hw-title={isAudioRecording ? 'STOP & SAVE AUDIO TAKE' : 'CAPTURE LIVE MASTER AUDIO'}
-            data-hw-func="Records the master stereo audio output of the studio into a downloadable audio file (.webm)."
+            data-hw-func="Records the live master stereo audio output while you jam into a downloadable audio take."
             data-hw-state={isAudioRecording ? 'RECORDING AUDIO' : `${audioTakes.length} TAKES SAVED`}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap border ${
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap border ${
               isAudioRecording
                 ? 'bg-emerald-600 border-emerald-400 text-white shadow-[0_0_14px_rgba(16,185,129,0.6)]'
                 : 'bg-zinc-800 hover:bg-zinc-700 border-zinc-700 text-emerald-400'
             }`}
           >
             <Radio className="w-3.5 h-3.5" />
-            <span>{isAudioRecording ? 'Stop Audio Capture' : 'Capture Audio'}</span>
+            <span>{isAudioRecording ? 'Stop Live Capture' : 'Capture Live'}</span>
           </button>
 
           {/* Export MIDI Button */}
@@ -324,7 +339,7 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
           </span>
           {loopingPads.size === 0 ? (
             <span className="text-zinc-500">
-              None — click any <strong className="text-zinc-300">MPC Pad (1–8)</strong> on the controller above to loop its sound
+              None — tap any <strong className="text-zinc-300">MPC Pad (1–8)</strong> 1×, 2×, 3×... to layer hits into the beat
             </span>
           ) : (
             Array.from(loopingPads)
@@ -332,18 +347,21 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
               .map((padIdx) => {
                 const padName =
                   padBank === 'A' ? program.padNamesA[padIdx] : program.padNamesB[padIdx];
+                const hitCount = drumEvents.filter(
+                  (e) => e.index === padIdx && (e.bank || 'A') === padBank
+                ).length;
                 return (
                   <button
                     key={padIdx}
                     type="button"
                     onClick={() => onTogglePadLoop(padIdx)}
-                    data-hw-title={`STOP PAD ${padIdx + 1} LOOP`}
-                    data-hw-func={`Stops PAD ${padIdx + 1} (${padName}) from looping in the beat.`}
+                    data-hw-title={`STOP PAD ${padIdx + 1} LOOP (${hitCount} HITS)`}
+                    data-hw-func={`Clears all ${hitCount} hit(s) of PAD ${padIdx + 1} (${padName}) from the beat loop.`}
                     className="px-2 py-0.5 rounded bg-red-600/25 border border-red-500/70 text-red-200 font-mono-tabular font-bold text-[11px] flex items-center gap-1.5 hover:bg-red-600/40 cursor-pointer"
                   >
                     <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-ping" />
                     <span>
-                      PAD {padIdx + 1}: {padName} ×
+                      PAD {padIdx + 1}: {padName} ({hitCount}×) ✕
                     </span>
                   </button>
                 );
@@ -355,12 +373,21 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
           <Guitar className="w-3.5 h-3.5 text-amber-400" />
           <span className="uppercase tracking-wider text-zinc-400 font-bold">Bass Line:</span>
           {bassEvents.length > 0 ? (
-            <span className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-500/50 text-amber-300 font-bold text-[11px]">
-              {activeBassVoiceInLoop?.toUpperCase()} JOINED ({bassEvents.length} notes)
-            </span>
+            <button
+              type="button"
+              onClick={() => onClearTrack('bass')}
+              data-hw-title="STOP BASS GUITAR LOOP"
+              data-hw-func="Stops the active Bass Guitar loop from playing in the beat."
+              className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-500/60 text-amber-200 font-bold text-[11px] flex items-center gap-1.5 hover:bg-amber-500/35 cursor-pointer"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+              <span>
+                {activeBassVoiceInLoop?.toUpperCase()} ({bassEvents.length}× — {formatMidiNote(bassEvents[0].index, true)}) ✕
+              </span>
+            </button>
           ) : (
             <span className="text-zinc-500">
-              Select a <strong className="text-amber-300">Bass Guitar</strong> in <strong className="text-zinc-300">KEY VOICE</strong> above to join the beat
+              Select a <strong className="text-amber-300">Bass Guitar</strong> in <strong className="text-zinc-300">KEY VOICE</strong> above, then press any key 1×, 2×, 3×... to layer bass notes
             </span>
           )}
         </div>
@@ -369,9 +396,19 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
       {/* One-Click "Create Beat" Starter Templates & Quick Actions Bar */}
       <div className="flex flex-wrap items-center justify-between gap-2 bg-[#111318] border border-zinc-800/80 rounded-lg px-3 py-2">
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[10px] font-mono-tabular font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1 mr-1">
+          <button
+            type="button"
+            onClick={() => onClearTrack('all')}
+            data-hw-title="NEW BLANK BEAT (START FROM SCRATCH)"
+            data-hw-func="Clears all tracks and resets the playhead to Bar 1, Beat 1 so you can produce your own beat from scratch."
+            className="px-2.5 py-1 rounded bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/60 text-xs font-bold text-emerald-200 transition-all cursor-pointer flex items-center gap-1"
+          >
+            <span>+ New Blank Beat (From Scratch)</span>
+          </button>
+
+          <span className="text-[10px] font-mono-tabular font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1 ml-2 mr-1">
             <Sparkles className="w-3 h-3 text-red-400" />
-            Full Beat Combos:
+            Starter Beats:
           </span>
 
           <button
@@ -381,7 +418,7 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
             data-hw-func="Generates a full 2-bar Hip-Hop beat with SP-1200 Drums, a Fingered P-Bass guitar line, and Neo-Soul Rhodes chords."
             className="px-2.5 py-1 rounded bg-zinc-800 hover:bg-red-600/25 hover:border-red-500/50 border border-zinc-700/80 text-xs font-semibold text-zinc-200 transition-all cursor-pointer"
           >
-            + Boom-Bap + P-Bass Beat
+            + Boom-Bap + P-Bass
           </button>
 
           <button
@@ -391,7 +428,7 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
             data-hw-func="Generates a syncopated Funk groove featuring Slap & Pop Jazz Bass guitar octaves, pocket drums, and synth stabs."
             className="px-2.5 py-1 rounded bg-zinc-800 hover:bg-red-600/25 hover:border-red-500/50 border border-zinc-700/80 text-xs font-semibold text-zinc-200 transition-all cursor-pointer"
           >
-            + Funk Slap Bass Jam
+            + Funk Slap Bass
           </button>
 
           <button
@@ -416,7 +453,7 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5">
-          {(recordedEvents.length > 0 || loopingPads.size > 0) && (
+          {recordedEvents.length > 0 && (
             <>
               <button
                 type="button"
@@ -489,7 +526,7 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-red-400 flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-red-500" />
-                  1. MPC DRUMS
+                  1. MPC DRUMS ({drumEvents.length})
                 </span>
                 <div className="flex items-center gap-1">
                   <button
@@ -514,9 +551,36 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
                   </button>
                 </div>
               </div>
-              <span className="text-[10px] font-mono-tabular text-zinc-400">
-                {drumEvents.length} Hits · Click Pad or grid to loop
-              </span>
+
+              {/* Pad Selector (P1..P8) for Click-to-Insert on Track 1 Grid */}
+              <div className="flex items-center justify-between text-[10px] font-mono-tabular text-zinc-400">
+                <span>Pad:</span>
+                <div className="flex items-center gap-0.5">
+                  {Array.from({ length: 8 }, (_, padIdx) => {
+                    const padSample =
+                      padBank === 'A' ? program.padNamesA[padIdx] : program.padNamesB[padIdx];
+                    return (
+                      <button
+                        key={padIdx}
+                        type="button"
+                        data-hw-title={`SELECT PAD ${padIdx + 1} (${padSample.toUpperCase()})`}
+                        data-hw-func={`Selects PAD ${padIdx + 1} (${padSample}) so clicking any step on Track 1 places this drum sound.`}
+                        onClick={() => {
+                          setQuickDrumPad(padIdx);
+                          soundEngine.triggerPad(padIdx, padBank, 112);
+                        }}
+                        className={`px-1 rounded text-[8.5px] font-bold cursor-pointer ${
+                          quickDrumPad === padIdx
+                            ? 'bg-red-600 text-white border border-red-400'
+                            : 'bg-zinc-800 text-zinc-400 hover:text-white'
+                        }`}
+                      >
+                        P{padIdx + 1}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
 
             {/* Track 1 Timeline Canvas (32 Sixteenth-Note Slots) */}
@@ -527,22 +591,25 @@ export const BeatStudioRecorder: React.FC<BeatStudioRecorderProps> = ({
                   const isBarStart = step32 % 16 === 0;
                   const isBeatStart = step32 % 4 === 0;
                   const beatPos = step32 * 0.25;
+                  const chosenPadName =
+                    padBank === 'A'
+                      ? program.padNamesA[quickDrumPad]
+                      : program.padNamesB[quickDrumPad];
                   return (
                     <button
                       key={step32}
                       type="button"
                       data-hw-title={`DRUM TIMELINE · STEP ${step32 + 1}/32`}
-                      data-hw-func="Click to insert an MPC Kick/Snare drum hit at this 1/16th-note position."
+                      data-hw-func={`Click to place PAD ${quickDrumPad + 1} (${chosenPadName}) at Step ${step32 + 1}/32.`}
                       onClick={() => {
-                        const padIdx = step32 % 8 === 4 ? 1 : 0;
-                        soundEngine.triggerPad(padIdx, padBank, 115);
+                        soundEngine.triggerPad(quickDrumPad, padBank, 116);
                         onAddQuickEvent({
                           id: `manual-drum-${Date.now()}-${Math.random()}`,
                           beatOffset: beatPos,
                           type: 'pad',
-                          index: padIdx,
+                          index: quickDrumPad,
                           bank: padBank,
-                          velocity: 115,
+                          velocity: 116,
                           durationBeats: 0.25,
                         });
                       }}
