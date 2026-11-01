@@ -85,7 +85,7 @@ export default defineConfig(() => {
           ],
         },
         devOptions: {
-          enabled: true,
+          enabled: false,
           type: 'module',
         },
       }),
@@ -96,8 +96,9 @@ export default defineConfig(() => {
       },
     },
     server: {
-      // HMR is disabled in AI Studio to prevent WebSocket connection errors in the proxied preview environment.
-      hmr: false,
+      // HMR and WS are disabled in AI Studio to prevent WebSocket connection errors in the proxied preview environment.
+      hmr: false as const,
+      ws: false as const,
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
   };

@@ -2,6 +2,52 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      (function () {
+        var NativeWebSocket = window.WebSocket;
+        if (!NativeWebSocket) return;
+        function PatchedWebSocket(url, protocols) {
+          var isViteHmr =
+            protocols === 'vite-hmr' ||
+            protocols === 'vite-ping' ||
+            (Array.isArray(protocols) &&
+              (protocols.indexOf('vite-hmr') !== -1 || protocols.indexOf('vite-ping') !== -1));
+          if (isViteHmr) {
+            var target = new EventTarget();
+            target.url = String(url || '');
+            target.protocol = typeof protocols === 'string' ? protocols : 'vite-hmr';
+            target.readyState = 1; // OPEN
+            target.bufferedAmount = 0;
+            target.extensions = '';
+            target.binaryType = 'blob';
+            target.send = function () {};
+            target.close = function () {
+              target.readyState = 3;
+            };
+            setTimeout(function () {
+              var openEvt = new Event('open');
+              target.dispatchEvent(openEvt);
+              if (typeof target.onopen === 'function') target.onopen(openEvt);
+              var msgEvt = new MessageEvent('message', {
+                data: JSON.stringify({ type: 'connected' }),
+              });
+              target.dispatchEvent(msgEvt);
+              if (typeof target.onmessage === 'function') target.onmessage(msgEvt);
+            }, 10);
+            return target;
+          }
+          return protocols !== undefined
+            ? new NativeWebSocket(url, protocols)
+            : new NativeWebSocket(url);
+        }
+        PatchedWebSocket.prototype = NativeWebSocket.prototype;
+        PatchedWebSocket.CONNECTING = 0;
+        PatchedWebSocket.OPEN = 1;
+        PatchedWebSocket.CLOSING = 2;
+        PatchedWebSocket.CLOSED = 3;
+        window.WebSocket = PatchedWebSocket;
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AKAI MPK mini Studio</title>
     <meta name="description" content="Interactive hardware-accurate AKAI Professional MPK mini MK2 synthesizer, MPC drum pad controller, arpeggiator, and loop workstation built with Web Audio API." />
